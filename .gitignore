@@ -1,0 +1,5 @@
+.venv
+.python-version
+.idea
+.vscode
+dist
