@@ -20,6 +20,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Generator,
     Generic,
     Iterable,
     List,
@@ -153,9 +154,8 @@ class FunctionTask(BaseTaskModel, Generic[T]):
         logger.debug(
             f"Executing task '{self.task_id}': "
             f"'{self.func_name}' with args {self.args} and kwargs {self.kwargs}"
-            f"\nExecution context: {exec_context}"
+            # f"\nExecution context: {exec_context}"
         )
-
         return self.func(*self.args, **kwargs)
 
 
@@ -238,17 +238,48 @@ class DAGRunner:
                 task.status = TaskStatus.PENDING
                 self.results.pop(node_id, None)
 
-    def is_done(self, tags: list[str] = None):
-        if tags:
-            return all(
-                data.get("task").status == TaskStatus.DONE
-                for _, data in self.graph.nodes(data=True)
-                if self.any_tag_in_tags(*data.get("task").tags, tags=tags)
-            )
-        return all(
-            data.get("task").status == TaskStatus.DONE
-            for _, data in self.graph.nodes(data=True)
-        )
+    @staticmethod
+    def are_ancestors_done(node_id: str, graph: DiGraph):
+        for asc_id in nx.ancestors(graph, node_id):
+            task = graph.nodes[asc_id].get("task")
+            if task.status != TaskStatus.DONE:
+                return False
+        return True
+
+    @staticmethod
+    def get_secure_node_generator(graph: DiGraph) -> Generator[str]:
+        gen_dict = {
+            g: gen for g, gen in enumerate(list(nx.topological_generations(graph)))
+        }
+        moved_set = set()
+        retries = 0
+        for g, gen in gen_dict.items():
+            logger.debug(f"Generation {g}: {gen}")
+            if g == 0:
+                logger.debug(f"Yielding generation {g} directly (no dependencies)")
+                yield from gen
+            else:
+                i = 0
+                while i < len(gen):
+                    node = gen[i]
+                    if DAGRunner.are_ancestors_done(node, graph):
+                        logger.debug(f"Yielding node {node} (gen {g}, position {i+1}/{len(gen)})")
+                        yield node
+                        i += 1
+                    elif node not in moved_set:
+                        logger.debug(f"Moving node {node} to end of generation {g}")
+                        gen.remove(node)
+                        gen.append(node)
+                        moved_set.add(node)
+                        # * process same i index again
+                    else:
+                        retries += 1
+                        logger.debug(
+                            f"Node {node} already moved, waiting for ancestors to be done, "
+                            f"retries: {retries}"
+                        )
+                        time.sleep(1)
+                        # * process same i index again
 
     @staticmethod
     def any_tag_in_tags(*args: str, tags: list[str]) -> bool:
@@ -297,6 +328,7 @@ class DAGRunner:
 
         except Exception as e:
             self.results[task_id] = e
+            logger.error(f"{task_id}: failed with exec_context: {exec_context}")
             task = self.graph.nodes[task_id].get("task")
             task.status = TaskStatus.DONE
 
@@ -385,38 +417,28 @@ class DAGRunner:
 
         # Execute tasks in topological order using a thread pool to parallelize excution
         # in multiple threads and using graph generations to execute tasks in parallel.
-        for generation in nx.topological_generations(working_graph):
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                for node_id in generation:
-                    task = working_graph.nodes[node_id].get("task")
-                    if task.status == "done":
-                        logger.info(f"{task.task_id}: already done, skipping")
-                        continue
-                    task.status = "submited"
-                    executor.submit(
-                        task.execute, exec_context=exec_context
-                    ).add_done_callback(
-                        self.done_callback(
-                            task_id=task.task_id, exec_context=exec_context
-                        )
-                    )
+        max_workers = 3
+        node_gen = DAGRunner.get_secure_node_generator(working_graph)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for node_id in node_gen:
+                task = working_graph.nodes[node_id].get("task")
+                if task.status == "done":
+                    logger.info(f"{task.task_id}: already done, skipping")
+                    continue
+                task.status = "submited"
+                executor.submit(
+                    task.execute, exec_context=exec_context
+                ).add_done_callback(
+                    self.done_callback(task_id=task.task_id, exec_context=exec_context)
+                )
+                time.sleep(0.001)
         return self.results
 
 
-def func_task_1() -> int:
+def func_task(sleep: int = 0) -> int:
     """A sample function that returns 1."""
-    time.sleep(5)
-    return 1
-
-
-def func_task_2() -> int:
-    """A sample function that returns 2."""
-    return 2
-
-
-def func_task_3(a: int, b: int) -> int:
-    """A sample function that returns the sum of two integers."""
-    return a + b
+    time.sleep(sleep)
+    return 0
 
 
 def example_usage() -> None:
@@ -432,43 +454,59 @@ def example_usage() -> None:
         # Add all tasks first
         task_a = FunctionTask(
             task_id="task_a",
-            func=func_task_1,
-            args=(),
+            func=func_task,
+            args=(5,),
             tags=["main"],
         )
         task_b = FunctionTask(
             task_id="task_b",
-            func=func_task_2,
+            func=func_task,
             args=(),
-            tags=["hal"],
+            tags=["main"],
             scheduling=Scheduling(active_days="wed"),
         )
         task_c = FunctionTask(
             task_id="task_c",
-            func=func_task_3,
-            args=(1, 3),
+            func=func_task,
+            args=(),
             tags=["main"],
         )
         task_d = FunctionTask(
             task_id="task_d",
-            func=func_task_3,
-            args=(1, 3),
+            func=func_task,
+            args=(),
             tags=["sub"],
             scheduling=Scheduling(day=1),
         )
         task_e = FunctionTask(
             task_id="task_e",
-            func=func_task_3,
-            args=(1, 3),
+            func=func_task,
+            args=(),
             tags=["sub"],
+        )
+        task_f = FunctionTask(
+            task_id="task_f",
+            func=func_task,
+            args=(),
+            tags=["main"],
+        )
+        task_g = FunctionTask(
+            task_id="task_g",
+            func=func_task,
+            args=(),
+            tags=["main"],
         )
         runner.add_task("task_a", task_a)
         runner.add_task("task_b", task_b)
         runner.add_task("task_c", task_c)
         runner.add_task("task_d", task_d)
         runner.add_task("task_e", task_e)
+        runner.add_task("task_f", task_f)
+        runner.add_task("task_g", task_g)
         # Then set up dependencies
         runner.add_dependency("task_c", ["task_a", "task_b"])
+        runner.add_dependency("task_f", ["task_b"])
+        runner.add_dependency("task_g", ["task_f"])
         runner.add_dependency("task_e", ["task_d"])
 
     try:
@@ -481,7 +519,7 @@ def example_usage() -> None:
             "config": {},
         }
         runner.execute(tags=tags, exec_context=exec_context)
-        logger.info("\nExecution results:")
+        logger.info("Execution results:")
         for task_id, result in runner.results.items():
             logger.info(f"{task_id}: {result}")
 
