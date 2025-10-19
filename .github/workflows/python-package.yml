@@ -31,4 +31,13 @@ jobs:
       uses: astral-sh/setup-uv@v7.1.0
       with:
           python-version: ${{ matrix.python-version }}
+              # Glob pattern to match files relative to the repository root to control the cache
+          cache-dependency-glob: |
+            **/*requirements*.txt
+            **/*requirements*.in
+            **/*constraints*.txt
+            **/*constraints*.in
+            **/pyproject.toml
+            **/uv.lock
+            **/*.py.lock
           
