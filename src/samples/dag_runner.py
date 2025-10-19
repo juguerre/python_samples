@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -160,7 +163,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
 
 
 class DAGStorage:
-    """Class for"""
+    """Class for saving and loading DAGs to and from a file."""
 
     def __init__(self, file_path: str):
         self._file_path = file_path
@@ -192,7 +195,7 @@ class DAGStorage:
         with open(self._file_path, "w") as f:
             json.dump(data, f, indent=2)
 
-    def load_dag(self) -> DAGRunner:
+    def load_dag(self, max_workers: int = 3) -> DAGRunner:
         with open(self._file_path, "r") as f:
             data = json.load(f)
 
@@ -200,7 +203,7 @@ class DAGStorage:
         graph = json_graph.node_link_graph(data, edges="edges")
 
         # Create a new DAGRunner
-        runner = DAGRunner()
+        runner = DAGRunner(max_workers=max_workers)
 
         # Recreate tasks (simplified - you'll need to handle task recreation properly)
         for node_id, node_data in graph.nodes(data=True):
@@ -226,10 +229,41 @@ class DAGRunner:
     of a task are completed before the task itself is executed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_workers: int) -> None:
         """Initialize a new DAGRunner with an empty graph."""
         self.graph = nx.DiGraph()
         self.results: Dict[str, Any] = {}
+        self.max_workers = max_workers
+        self._pool_workers_semaphore = threading.Semaphore(max_workers)
+        self._result_event = threading.Event()
+        self._lock = threading.Lock()
+
+    def wait_for_tasks_results(
+        self, node_id: str, graph: DiGraph, timeout: float = None
+    ) -> Any:
+        """Wait for a task to complete and return its result.
+
+        :param node_id: The ID of the node that is waiting for the tasks
+        :param graph: The graph to check.
+        :param timeout: Maximum time to wait in seconds (None for no timeout)
+        :return: The task's result
+        :raises TimeoutError: If the timeout is reached
+        :raises KeyError: If task_id doesn't exist
+        """
+
+        # Wait for any of the events to be set and then check for task results
+        while True:
+            task_id_lst = nx.ancestors(graph, node_id)
+            logger.debug(f"{node_id}: Waiting for task results: {task_id_lst}")
+            # * wait for any result event
+            if not self._result_event.wait(timeout=timeout):
+                raise TimeoutError("Timeout reached")
+
+            if self.are_ancestors_done(node_id=node_id, graph=graph):
+                logger.debug(f"{node_id}: Wait end: All tasks done: {task_id_lst}")
+                return
+            # check if all tasks are done
+            logger.debug(f"{node_id}: Tasks pending: {self.pending_ancestors(node_id, graph)}")
 
     def reset_status(self, tags: list[str] = None):
         for node_id, node in self.graph.nodes(data=True):
@@ -240,6 +274,12 @@ class DAGRunner:
 
     @staticmethod
     def are_ancestors_done(node_id: str, graph: DiGraph):
+        """Check if all ancestors of a node are done.
+
+        :param node_id: The ID of the node to check.
+        :param graph: The graph to check.
+        :return: True if all ancestors of the node are done, False otherwise.
+        """
         for asc_id in nx.ancestors(graph, node_id):
             task = graph.nodes[asc_id].get("task")
             if task.status != TaskStatus.DONE:
@@ -247,10 +287,62 @@ class DAGRunner:
         return True
 
     @staticmethod
-    def get_secure_node_generator(graph: DiGraph) -> Generator[str]:
+    def pending_ancestors(node_id: str, graph: DiGraph):
+        return [
+            asc_id
+            for asc_id in nx.ancestors(graph, node_id)
+            if graph.nodes[asc_id].get("task").status != TaskStatus.DONE
+        ]
+
+    @staticmethod
+    @curry
+    def sort_generation(
+        graph: DiGraph,
+        generations: list[list[str]],
+        generation: tuple[int, list[str]],
+    ) -> tuple[int, list[str]]:
+        g, generation = generation
+        if g == 0:
+            return g, generation
+        ancestors_index_d = {}
+        node_ancestors_d = {}
+        for node in generation:
+            ancestors = nx.ancestors(graph, node)
+            node_ancestors_d[node] = ancestors
+            ancestors_index_d[node] = max(
+                [
+                    generations[g - 1].index(asc_id)
+                    for asc_id in ancestors
+                    if asc_id in generations[g - 1]
+                ]
+            )
+            pass
+
+        s_gen = sorted(generation, key=lambda node_id: ancestors_index_d[node_id])
+        return g, s_gen
+
+    # noinspection D
+
+    def get_secure_node_generator(
+        self, graph: DiGraph, max_node_retries: int = 0
+    ) -> Generator[str]:
+        """Get a generator that yields nodes in topological order, ensuring that all
+        task ancestors of a node are done before the node is yielded.
+
+        :param graph: The graph to yield nodes from.
+        :param max_node_retries: The maximum number of retries for a node to be yielded. If 0,
+        there is no limit.
+        :return: A generator that yields nodes in topological order.
+        """
         gen_dict = {
             g: gen for g, gen in enumerate(list(nx.topological_generations(graph)))
         }
+        # * No need for generations sort ... topological order is already preserved
+        # generations = list(gen_dict.values())
+        # gen_dict = toolz.itemmap(
+        #     DAGRunner.sort_generation(graph, generations), gen_dict
+        # )
+
         moved_set = set()
         retries = 0
         for g, gen in gen_dict.items():
@@ -263,22 +355,34 @@ class DAGRunner:
                 while i < len(gen):
                     node = gen[i]
                     if DAGRunner.are_ancestors_done(node, graph):
-                        logger.debug(f"Yielding node {node} (gen {g}, position {i+1}/{len(gen)})")
+                        logger.debug(
+                            f"Yielding node {node} (gen {g}, position {i + 1}/{len(gen)})"
+                        )
                         yield node
+                        retries = 0
                         i += 1
-                    elif node not in moved_set:
+                    elif node not in moved_set and node != gen[-1]:
                         logger.debug(f"Moving node {node} to end of generation {g}")
                         gen.remove(node)
                         gen.append(node)
                         moved_set.add(node)
                         # * process same i index again
-                    else:
+                    elif retries < max_node_retries or max_node_retries == 0:
                         retries += 1
                         logger.debug(
-                            f"Node {node} already moved, waiting for ancestors to be done, "
+                            f"Node {node} already moved or in last position, "
+                            f"waiting for ancestors to be done, "
                             f"retries: {retries}"
                         )
-                        time.sleep(1)
+                        self.wait_for_tasks_results(node_id=node, graph=graph)
+                    else:
+                        logger.error(
+                            f"Node {node} already moved, and retried {max_node_retries} times ..."
+                            f"giving up"
+                        )
+                        yield node
+                        retries = 0
+                        i += 1
                         # * process same i index again
 
     @staticmethod
@@ -331,6 +435,12 @@ class DAGRunner:
             logger.error(f"{task_id}: failed with exec_context: {exec_context}")
             task = self.graph.nodes[task_id].get("task")
             task.status = TaskStatus.DONE
+        finally:
+            with self._lock:
+                self._result_event.set()
+                self._result_event.clear()
+                # release semaphore to allow pool to submit more tasks
+                self._pool_workers_semaphore.release()
 
     @staticmethod
     def warn_for_active_descendant(
@@ -417,28 +527,95 @@ class DAGRunner:
 
         # Execute tasks in topological order using a thread pool to parallelize excution
         # in multiple threads and using graph generations to execute tasks in parallel.
-        max_workers = 3
-        node_gen = DAGRunner.get_secure_node_generator(working_graph)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+
+        node_gen = self.get_secure_node_generator(working_graph)
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for node_id in node_gen:
                 task = working_graph.nodes[node_id].get("task")
                 if task.status == "done":
                     logger.info(f"{task.task_id}: already done, skipping")
                     continue
                 task.status = "submited"
+                self._pool_workers_semaphore.acquire()
                 executor.submit(
                     task.execute, exec_context=exec_context
                 ).add_done_callback(
                     self.done_callback(task_id=task.task_id, exec_context=exec_context)
                 )
-                time.sleep(0.001)
+                logger.debug(
+                    f"Active workers: {self.max_workers - self._pool_workers_semaphore._value}"
+                )
+
         return self.results
 
 
-def func_task(sleep: int = 0) -> int:
+def func_task(sleep: int = 0) -> float:
     """A sample function that returns 1."""
-    time.sleep(sleep)
+    if sleep:
+        sleep_t = random.random() * sleep
+        time.sleep(sleep_t)
+        return sleep_t
     return 0
+
+
+def example_usage2() -> None:
+    """Example usage of the DAGRunner class with separate node and edge creation."""
+    # Create a new DAG runner
+    storage = DAGStorage("dag.json")
+
+    if Path("dag.json").exists():
+        runner = storage.load_dag()
+
+    else:
+        runner = DAGRunner(8)
+        # Add all tasks first
+        for i in range(50):
+            task = FunctionTask(
+                task_id=f"task_{i}",
+                func=func_task,
+                args=(2,),
+                tags=["main"],
+            )
+
+            runner.add_task(f"task_{i}", task)
+
+        # generate ramdom dependencies
+        for i in range(50):
+            # add random dependencies to node i
+            n_of_deps = random.randint(0, min(i, 3))
+            deps_list = list(range(0, i))
+            deps_nums = random.choices(deps_list, k=n_of_deps)
+            for dep_num in deps_nums:
+                runner.add_dependency(f"task_{i}", [f"task_{dep_num}"])
+
+    try:
+        # Execute the DAG
+        tags = ["main"]
+        exec_context = {
+            "date": "2025-10-01",
+            "dry-run": False,
+            "test": False,
+            "config": {},
+        }
+        tick = time.perf_counter()
+        runner.execute(tags=tags, exec_context=exec_context)
+        logger.info(f"Execution time: {time.perf_counter() - tick}")
+        logger.info("Execution results:")
+        for task_id, result in runner.results.items():
+            logger.info(f"{task_id}: {result}")
+
+        logger.info("Execution success! Removing file")
+        Path("dag.json").unlink(missing_ok=True)
+
+    except KeyboardInterrupt:
+        logger.warning("\nExecution interrupted. Saving DAG...")
+        storage.save_dag(runner)
+        # force exit of main and all threads
+        os._exit(1)
+    except Exception as e:
+        logger.exception(f"Execution failed: {e}")
+        Path("dag.json").unlink(missing_ok=True)
+        os._exit(1)
 
 
 def example_usage() -> None:
@@ -450,7 +627,7 @@ def example_usage() -> None:
         runner = storage.load_dag()
 
     else:
-        runner = DAGRunner()
+        runner = DAGRunner(3)
         # Add all tasks first
         task_a = FunctionTask(
             task_id="task_a",
@@ -471,30 +648,38 @@ def example_usage() -> None:
             args=(),
             tags=["main"],
         )
+
         task_d = FunctionTask(
             task_id="task_d",
             func=func_task,
             args=(),
-            tags=["sub"],
-            scheduling=Scheduling(day=1),
+            tags=["main"],
         )
         task_e = FunctionTask(
             task_id="task_e",
             func=func_task,
             args=(),
-            tags=["sub"],
+            tags=["main"],
         )
         task_f = FunctionTask(
             task_id="task_f",
             func=func_task,
             args=(),
             tags=["main"],
+            scheduling=Scheduling(),
         )
         task_g = FunctionTask(
             task_id="task_g",
             func=func_task,
             args=(),
-            tags=["main"],
+            tags=["sub"],
+            scheduling=Scheduling(day=1),
+        )
+        task_h = FunctionTask(
+            task_id="task_h",
+            func=func_task,
+            args=(),
+            tags=["sub"],
         )
         runner.add_task("task_a", task_a)
         runner.add_task("task_b", task_b)
@@ -503,11 +688,14 @@ def example_usage() -> None:
         runner.add_task("task_e", task_e)
         runner.add_task("task_f", task_f)
         runner.add_task("task_g", task_g)
+        runner.add_task("task_h", task_h)
         # Then set up dependencies
         runner.add_dependency("task_c", ["task_a", "task_b"])
-        runner.add_dependency("task_f", ["task_b"])
-        runner.add_dependency("task_g", ["task_f"])
-        runner.add_dependency("task_e", ["task_d"])
+        runner.add_dependency("task_d", ["task_a"])
+        runner.add_dependency("task_e", ["task_b"])
+        runner.add_dependency("task_f", ["task_e"])
+        # tag "sub"
+        runner.add_dependency("task_h", ["task_g"])
 
     try:
         # Execute the DAG
@@ -538,4 +726,6 @@ def example_usage() -> None:
 
 
 if __name__ == "__main__":
-    example_usage()
+    logger.remove()  # Remove default handler
+    logger.add(sys.stderr, level="DEBUG")
+    example_usage2()
