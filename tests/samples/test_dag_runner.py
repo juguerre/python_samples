@@ -1,5 +1,5 @@
 """Tests for the DAG runner module."""
-
+import os
 from datetime import datetime
 
 import pytest
@@ -203,3 +203,35 @@ def test_dag_execution_order(sample_dag):
     # Verify execution order (task1 -> task2 -> task3)
     assert list(result.keys()).index("task1") < list(result.keys()).index("task2")
     assert list(result.keys()).index("task2") < list(result.keys()).index("task3")
+
+
+def test_dag_execution_order_with_test_tag(sample_dag):
+    """Test that tasks are executed in the correct order."""
+    # Execute DAG
+    executor = TaskDAGExecutor(sample_dag, max_workers=1)
+    # result is an OrderectDict and maintains the order of execution
+    result = executor.execute(exec_context={"date": datetime.now().isoformat()}, tags=["test"])
+
+    # Verify task3 is not executed (taged with "prod" instead of test)
+
+    assert len(result) == 2
+
+
+def test_dag_save_and_load(sample_dag):
+    """Test saving and loading a DAG to/from a file."""
+    # Create and save a DAG
+    filepath = "test_dag.json"
+    sample_dag.save_dag()
+
+    # Load the DAG
+    loaded_dag = TaskDAG.load_dag(filepath)
+
+    assert loaded_dag.graph.number_of_nodes() == sample_dag.graph.number_of_nodes()
+    assert loaded_dag.graph.number_of_edges() == sample_dag.graph.number_of_edges()
+    assert loaded_dag.get_task("task1").task_id == "task1"
+    assert loaded_dag.get_task("task2").task_id == "task2"
+    assert loaded_dag.get_task("task3").task_id == "task3"
+    # remove file
+    os.remove(filepath)
+
+
