@@ -16,16 +16,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
+    
     - name: astral-sh/setup-uv
   # You may pin to the exact commit or the version.
   # uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d
       uses: astral-sh/setup-uv@v7.1.0
+      with:
+          python-version: ${{ matrix.python-version }}
           
