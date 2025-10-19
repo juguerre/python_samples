@@ -3,11 +3,12 @@ name = "samples"
 version = "0.1.0"
 description = "A sample project demonstrating DAG execution with NetworkX"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "loguru>=0.7.3",
     "networkx>=3.0",
     "pydantic>=2.12.3",
+    "pytest-cov>=7.0.0",
     "toolz>=1.1.0",
     "typing-extensions>=4.15.0",
 ]
