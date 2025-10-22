@@ -613,77 +613,77 @@ class TaskDAGExecutor:
 
         return self.results
 
-
-def func_task(sleep: int = 0) -> float:
-    """A sample function that returns 1."""
-    if sleep:
-        sleep_t = random.random() * sleep
-        time.sleep(sleep_t)
-        return sleep_t
-    return 0
-
-
-def example_usage2() -> None:
-    """Example usage of the DAGRunner class with separate node and edge creation."""
-    # Create a new DAG runner
-    dag = TaskDAG("dag.json")
-
-    if Path("dag.json").exists():
-        dag = dag.load_dag()
-
-    else:
-        # Add all tasks first
-        for i in range(50):
-            task = FunctionTask(
-                task_id=f"task_{i}",
-                func=func_task,
-                args=(2,),
-                tags=["main"],
-            )
-
-            dag.add_task(f"task_{i}", task)
-
-        # generate ramdom dependencies
-        for i in range(50):
-            # add random dependencies to node i
-            n_of_deps = random.randint(0, min(i, 3))
-            deps_list = list(range(0, i))
-            deps_nums = random.choices(deps_list, k=n_of_deps)
-            for dep_num in deps_nums:
-                dag.add_dependency(f"task_{i}", [f"task_{dep_num}"])
-
-    try:
-        # Execute the DAG
-        tags = ["main"]
-        exec_context = {
-            "date": "2025-10-01",
-            "dry-run": False,
-            "test": False,
-            "config": {},
-        }
-        tick = time.perf_counter()
-        dag_exec = TaskDAGExecutor(dag, max_workers=8)
-        dag_exec.execute(tags=tags, exec_context=exec_context)
-        logger.info(f"Execution time: {time.perf_counter() - tick}")
-        logger.info("Execution results:")
-        for task_id, result in dag_exec.results.items():
-            logger.info(f"{task_id}: {result}")
-
-        logger.info("Execution success! Removing file")
-        Path("dag.json").unlink(missing_ok=True)
-
-    except KeyboardInterrupt:
-        logger.warning("\nExecution interrupted. Saving DAG...")
-        dag.save_dag()
-        # force exit of main and all threads
-        os._exit(1)
-    except Exception as e:
-        logger.exception(f"Execution failed: {e}")
-        Path("dag.json").unlink(missing_ok=True)
-        os._exit(1)
-
-
-if __name__ == "__main__":
-    logger.remove()  # Remove default handler
-    logger.add(sys.stderr, level="DEBUG")
-    example_usage2()
+#
+# def func_task(sleep: int = 0) -> float:
+#     """A sample function that returns 1."""
+#     if sleep:
+#         sleep_t = random.random() * sleep
+#         time.sleep(sleep_t)
+#         return sleep_t
+#     return 0
+#
+#
+# def example_usage2() -> None:
+#     """Example usage of the DAGRunner class with separate node and edge creation."""
+#     # Create a new DAG runner
+#     dag = TaskDAG("dag.json")
+#
+#     if Path("dag.json").exists():
+#         dag = dag.load_dag()
+#
+#     else:
+#         # Add all tasks first
+#         for i in range(50):
+#             task = FunctionTask(
+#                 task_id=f"task_{i}",
+#                 func=func_task,
+#                 args=(2,),
+#                 tags=["main"],
+#             )
+#
+#             dag.add_task(f"task_{i}", task)
+#
+#         # generate ramdom dependencies
+#         for i in range(50):
+#             # add random dependencies to node i
+#             n_of_deps = random.randint(0, min(i, 3))
+#             deps_list = list(range(0, i))
+#             deps_nums = random.choices(deps_list, k=n_of_deps)
+#             for dep_num in deps_nums:
+#                 dag.add_dependency(f"task_{i}", [f"task_{dep_num}"])
+#
+#     try:
+#         # Execute the DAG
+#         tags = ["main"]
+#         exec_context = {
+#             "date": "2025-10-01",
+#             "dry-run": False,
+#             "test": False,
+#             "config": {},
+#         }
+#         tick = time.perf_counter()
+#         dag_exec = TaskDAGExecutor(dag, max_workers=8)
+#         dag_exec.execute(tags=tags, exec_context=exec_context)
+#         logger.info(f"Execution time: {time.perf_counter() - tick}")
+#         logger.info("Execution results:")
+#         for task_id, result in dag_exec.results.items():
+#             logger.info(f"{task_id}: {result}")
+#
+#         logger.info("Execution success! Removing file")
+#         Path("dag.json").unlink(missing_ok=True)
+#
+#     except KeyboardInterrupt:
+#         logger.warning("\nExecution interrupted. Saving DAG...")
+#         dag.save_dag()
+#         # force exit of main and all threads
+#         os._exit(1)
+#     except Exception as e:
+#         logger.exception(f"Execution failed: {e}")
+#         Path("dag.json").unlink(missing_ok=True)
+#         os._exit(1)
+#
+#
+# if __name__ == "__main__":
+#     logger.remove()  # Remove default handler
+#     logger.add(sys.stderr, level="DEBUG")
+#     example_usage2()

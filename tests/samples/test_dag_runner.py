@@ -1,6 +1,8 @@
 """Tests for the DAG runner module."""
+
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Literal
 
 import pytest
 
@@ -12,6 +14,44 @@ from samples.dag_runner import (
     TaskDAGFilter,
     TaskStatus,
 )
+
+
+def get_next_weekday(
+    weekday: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    ],
+) -> datetime:
+    """
+    Get the next occurrence of the specified weekday.
+
+    :param weekday: The target weekday (full name in lowercase)
+    :type weekday: Literal['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    :return: A datetime object representing the next occurrence of the specified weekday at midnight
+    :rtype: datetime
+    """
+    weekday_map = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+
+    target_weekday = weekday_map[weekday.lower()]
+    today = datetime.now().date()
+    days_ahead = (target_weekday - today.weekday()) % 7
+    # If today is the target day and it's not past midnight yet, stay on today
+    if days_ahead == 0 and datetime.now().time() < datetime.min.time():
+        days_ahead = 0
+    elif (
+        days_ahead == 0
+    ):  # If today is the target day but past midnight, go to next week
+        days_ahead = 7
+
+    next_date = datetime.now() + timedelta(days=days_ahead)
+    return next_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def test_create_task():
@@ -193,6 +233,42 @@ def sample_dag():
     return dag
 
 
+@pytest.fixture
+def sample_scheduled_dag() -> TaskDAG:
+    """Create a sample DAG for testing."""
+    dag = TaskDAG("test_dag.json")
+
+    # Create tasks
+    task1 = FunctionTask(
+        task_id="task1", func=lambda: 1, tags=["test"], scheduling=Scheduling(day=1)
+    )
+    task2 = FunctionTask(
+        task_id="task2",
+        func=lambda x: x + 1,
+        args=(1,),
+        tags=["test"],
+        scheduling=Scheduling(active_days="wed"),
+    )
+    task3 = FunctionTask(
+        task_id="task3",
+        func=lambda x: x * 2,
+        args=(2,),
+        tags=["prod"],
+        scheduling=Scheduling(),
+    )
+
+    # Add tasks to DAG
+    dag.add_task("task1", task1)
+    dag.add_task("task2", task2)
+    dag.add_task("task3", task3)
+
+    # Add dependencies
+    dag.add_dependency("task2", ["task1"])
+    dag.add_dependency("task3", ["task2"])
+
+    return dag
+
+
 def test_dag_execution_order(sample_dag):
     """Test that tasks are executed in the correct order."""
     # Execute DAG
@@ -210,7 +286,9 @@ def test_dag_execution_order_with_test_tag(sample_dag):
     # Execute DAG
     executor = TaskDAGExecutor(sample_dag, max_workers=1)
     # result is an OrderectDict and maintains the order of execution
-    result = executor.execute(exec_context={"date": datetime.now().isoformat()}, tags=["test"])
+    result = executor.execute(
+        exec_context={"date": datetime.now().isoformat()}, tags=["test"]
+    )
 
     # Verify task3 is not executed (taged with "prod" instead of test)
 
@@ -235,3 +313,31 @@ def test_dag_save_and_load(sample_dag):
     os.remove(filepath)
 
 
+def test_scheduling_periodicity(sample_scheduled_dag):
+    assert (
+        sample_scheduled_dag.get_task("task1").scheduling.is_active_day(
+            datetime.now().replace(day=1)
+        )
+        is True
+    )
+    assert (
+        sample_scheduled_dag.get_task("task1").scheduling.is_active_day(
+            datetime.now().replace(day=2)
+        )
+        is False
+    )
+    assert (
+        sample_scheduled_dag.get_task("task2").scheduling.is_active_day(
+            get_next_weekday("wednesday")
+        )
+        is True
+    )
+    assert (
+        sample_scheduled_dag.get_task("task2").scheduling.is_active_day(
+            get_next_weekday("monday")
+        )
+        is False
+    )
+
+    assert sample_scheduled_dag.get_task("task1").scheduling.periodicity == "monthly"
+    assert sample_scheduled_dag.get_task("task2").scheduling.periodicity == "weekly"
