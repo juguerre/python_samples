@@ -1,8 +1,10 @@
 """Tests for the DAG runner module."""
 
 import os
+import random
+import time
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Callable, Literal
 
 import pytest
 
@@ -208,17 +210,27 @@ def test_save_and_load_dag(tmp_path):
 
 # Fixture for common test DAG
 @pytest.fixture
-def sample_dag():
+def sample_dag(func_factory: Callable[[int, float], Callable[[], None]]):
     """Create a sample DAG for testing."""
     dag = TaskDAG("test_dag.json")
 
     # Create tasks
-    task1 = FunctionTask(task_id="task1", func=lambda: 1, tags=["test"])
+    task1 = FunctionTask(
+        task_id="task1",
+        func=func_factory(0, 0.0),  # Never fails
+        tags=["test"],
+    )
     task2 = FunctionTask(
-        task_id="task2", func=lambda x: x + 1, args=(1,), tags=["test"]
+        task_id="task2",
+        func=func_factory(0, 1.0),  # Always fails
+        args=(1,),
+        tags=["test"],
     )
     task3 = FunctionTask(
-        task_id="task3", func=lambda x: x * 2, args=(2,), tags=["prod"]
+        task_id="task3",
+        func=lambda x: x * 2,
+        args=(2,),
+        tags=["prod"],
     )
 
     # Add tasks to DAG
@@ -234,24 +246,69 @@ def sample_dag():
 
 
 @pytest.fixture
-def sample_scheduled_dag() -> TaskDAG:
+def func_factory() -> Callable:
+    def get_task_func(max_sleep: int, exception_prob: float) -> Callable[[], None]:
+        def func():
+            time.sleep(random.random() * max_sleep)
+            if random.random() < exception_prob:
+                raise Exception("Task failed")
+
+        return func
+
+    return get_task_func
+
+
+@pytest.fixture
+def sample_dag_factory(func_factory: Callable) -> Callable[[int, int, float], TaskDAG]:
+    """Create a sample dag with a size of n tasks"""
+
+    def _n_size_sample_dag(n: int, max_sleep: int, exception_prob: float) -> TaskDAG:
+        dag = TaskDAG("test_dag.json")
+        for i in range(n):
+            task = FunctionTask(
+                task_id=f"task{i}",
+                func=func_factory(max_sleep, exception_prob),
+                tags=["test"],
+            )
+            dag.add_task(f"task{i}", task)
+        # generate random dependencies with no cycles
+        for i in range(n):
+            # add random dependencies to node i
+            n_of_deps = random.randint(0, min(i, 3))
+            deps_list = list(range(0, i))
+            deps_nums = random.choices(deps_list, k=n_of_deps)
+            for dep_num in deps_nums:
+                dag.add_dependency(f"task{i}", [f"task{dep_num}"])
+
+        return dag
+
+    return _n_size_sample_dag
+
+
+@pytest.fixture
+def sample_scheduled_dag(
+    func_factory: Callable[[int, float], Callable[[], None]],
+) -> TaskDAG:
     """Create a sample DAG for testing."""
     dag = TaskDAG("test_dag.json")
 
     # Create tasks
     task1 = FunctionTask(
-        task_id="task1", func=lambda: 1, tags=["test"], scheduling=Scheduling(day=1)
+        task_id="task1",
+        func=func_factory(1, 0.0),  # Never fails
+        tags=["test"],
+        scheduling=Scheduling(day=1),
     )
     task2 = FunctionTask(
         task_id="task2",
-        func=lambda x: x + 1,
+        func=func_factory(1, 1.0),  # Always fails
         args=(1,),
         tags=["test"],
         scheduling=Scheduling(active_days="wed"),
     )
     task3 = FunctionTask(
         task_id="task3",
-        func=lambda x: x * 2,
+        func=func_factory(1, 0.0),  # Never fails
         args=(2,),
         tags=["prod"],
         scheduling=Scheduling(),
@@ -341,3 +398,14 @@ def test_scheduling_periodicity(sample_scheduled_dag):
 
     assert sample_scheduled_dag.get_task("task1").scheduling.periodicity == "monthly"
     assert sample_scheduled_dag.get_task("task2").scheduling.periodicity == "weekly"
+
+
+def test_scheduling_performance(
+    sample_dag_factory: Callable[[int, int, float], TaskDAG],
+):
+    dag = sample_dag_factory(50, 0, 0.1)
+    executor = TaskDAGExecutor(dag, max_workers=3)
+    start_time = time.perf_counter()
+    executor.execute(exec_context={"date": datetime.now().isoformat()})
+    end_time = time.perf_counter()
+    print(f"Execution time: {end_time - start_time} seconds")
