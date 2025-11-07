@@ -54,7 +54,7 @@ jobs:
         uv sync --all-extras
 
     - name: Run tests with pytest
-      run: uv run python -m pytest -v --cov=samples --cov-report=term-missing --cov-report=xml
+      run: uv run python -m pytest -v --cov=src/samples --cov-report=term-missing --cov-report=xml
 
     - name: Upload coverage to Codecov
       if: github.event_name != 'pull_request'

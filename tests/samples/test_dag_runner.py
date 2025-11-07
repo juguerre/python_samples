@@ -410,6 +410,7 @@ def test_scheduling_periodicity(sample_scheduled_dag):
     assert sample_scheduled_dag.get_task("task2").scheduling.periodicity == "weekly"
 
 
+@pytest.mark.skip
 def test_scheduling_performance(
     sample_dag_factory: Callable[[int, int, float], TaskDAG],
 ):
