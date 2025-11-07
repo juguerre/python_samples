@@ -5,10 +5,12 @@ description = "A sample project demonstrating DAG execution with NetworkX"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "jinja2>=3.1.6",
     "loguru>=0.7.3",
     "networkx>=3.0",
     "pydantic>=2.12.3",
     "pytest-cov>=7.0.0",
+    "python-dateutil>=2.9.0.post0",
     "toolz>=1.1.0",
     "typing-extensions>=4.15.0",
 ]

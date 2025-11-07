@@ -1,5 +1,6 @@
 """Tests for the DAG runner module."""
 
+import math
 import os
 import random
 import time
@@ -245,11 +246,20 @@ def sample_dag(func_factory: Callable[[int, float], Callable[[], None]]):
     return dag
 
 
+def generate_cpu_load(duration_seconds: float) -> None:
+    start_time = time.time()
+    while (time.time() - start_time) < duration_seconds:
+        # Perform CPU-intensive calculations
+        x = 0
+        for i in range(1000000):
+            x += math.sqrt(i)
+
+
 @pytest.fixture
 def func_factory() -> Callable:
-    def get_task_func(max_sleep: int, exception_prob: float) -> Callable[[], None]:
+    def get_task_func(max_time: int, exception_prob: float) -> Callable[[], None]:
         def func():
-            time.sleep(random.random() * max_sleep)
+            generate_cpu_load(random.random() * max_time)
             if random.random() < exception_prob:
                 raise Exception("Task failed")
 
@@ -403,8 +413,8 @@ def test_scheduling_periodicity(sample_scheduled_dag):
 def test_scheduling_performance(
     sample_dag_factory: Callable[[int, int, float], TaskDAG],
 ):
-    dag = sample_dag_factory(50, 0, 0.1)
-    executor = TaskDAGExecutor(dag, max_workers=3)
+    dag = sample_dag_factory(100, 5, 0.1)
+    executor = TaskDAGExecutor(dag, max_workers=16)
     start_time = time.perf_counter()
     executor.execute(exec_context={"date": datetime.now().isoformat()})
     end_time = time.perf_counter()
