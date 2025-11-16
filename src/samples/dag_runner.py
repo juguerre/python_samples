@@ -555,6 +555,14 @@ class TaskDAGExecutor:
         # Execute tasks in topological order using a thread pool to parallelize excution
         # in multiple threads and using graph generations to execute tasks in parallel.
         node_gen = self.get_secure_node_generator(working_dag.graph)
+        self._execute_generation(exec_context, node_gen, working_dag)
+
+        return self.results
+
+    def _execute_generation(
+        self, exec_context: dict[str, Any], node_gen: Generator[str, None, None],
+        working_dag: TaskDAG
+    ) -> None:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for node_id in node_gen:
                 task = working_dag.get_task(node_id)
@@ -571,5 +579,3 @@ class TaskDAGExecutor:
                 logger.debug(
                     f"Active workers: {self.max_workers - self._pool_workers_semaphore._value}"
                 )
-
-        return self.results
