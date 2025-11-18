@@ -49,7 +49,7 @@ def parse_task_expression(
 
     # Create edges between consecutive stages
     # Each task in stage N connects to each task in stage N+1
-    G =_add_edgest_to_graph(G, task_groups)
+    G = _add_edgest_to_graph(G, task_groups)
 
     return G
 
@@ -69,13 +69,13 @@ def _add_edgest_to_graph(G: DiGraph, task_groups: list[Any]) -> DiGraph:
 
 # noinspection PyPep8Naming
 def _add_tasks_to_graph(
-    G: DiGraph, task_groups: list[Any], task_index: dict[str, Any] | None
+    G: DiGraph, task_groups: list[Any], task_index: dict[str, Any]
 ) -> DiGraph:
     gx = G.copy()
     for group in task_groups:
         for task in group:
             task_obj = task_index.get(task)
-            if not task_obj:
+            if not task_obj and task_index:
                 logger.warning(f"Task '{task}' not found in task index")
             gx.add_node(task, task=task_obj)
     return gx
