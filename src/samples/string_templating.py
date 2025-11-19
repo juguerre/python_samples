@@ -10,6 +10,12 @@ from toolz import curry
 
 @curry
 def date_format(s: str, frmt: str) -> str:
+    """Transforms a string datetime into a formatted string datetime
+
+    :param s: string datetime
+    :param frmt: format string
+    :return: formatted string datetime
+    """
     d = parse(s)
     if frmt == "isoformat":
         return d.isoformat()
@@ -18,6 +24,11 @@ def date_format(s: str, frmt: str) -> str:
 
 
 def datap(s: str) -> str:
+    """Transforms a string datetime into a DataP string datetime
+
+    :param s: string datetime
+    :return: DataP string datetime
+    """
     d = parse(s)
     if 2020 <= d.year < 2030:
         data_p = "G" + str(d.year - 2020)
@@ -56,6 +67,12 @@ def date_delta(
 
 @curry
 def tpl_timezone(s: str, tz: str) -> str:
+    """Transforms a string datetime into a string datetime in a given timezone
+
+    :param s: string datetime
+    :param tz: timezone
+    :return: string datetime in the given timezone
+    """
     d = parse(s)
     if not d.tzinfo:  # naive
         d = d.replace(tzinfo=ZoneInfo(tz))
@@ -65,12 +82,23 @@ def tpl_timezone(s: str, tz: str) -> str:
 
 
 def month_last_day(s: str) -> str:
+    """Transforms a string datetime into a string datetime of the last day of the month
+
+    :param s: string datetime
+    :return: string datetime of the last day of the month
+    """
     d = parse(s)
     d = d.replace(day=1) + relativedelta(months=1) - relativedelta(days=1)
     return d.isoformat()
 
 
 def month_first_day(s: str) -> str:
+    """Transforms a string datetime into a string datetime of the first day of the month
+
+    :param s: string datetime
+    :return: string datetime of the first day of the month
+    """
+
     d = parse(s)
     d = d.replace(day=1)
     return d.isoformat()
@@ -117,6 +145,18 @@ env.filters.update(SAFE_OPERATIONS)
 
 
 def process_jinja2_template(template: str, context: dict[str, Any]) -> str:
+    """Processes a Jinja2 template with the given context
+
+    >>> process_jinja2_template("Hello {{ name }}!", {"name": "World"})
+    'Hello World!'
+    >>> process_jinja2_template("Today is {{ today | date }}", {"today": datetime.date(2023, 1, 1)})
+    'Today is 2023-01-01'
+
+
+    :param template: Jinja2 template
+    :param context: context for the template
+    :return: processed template
+    """
     j_template = env.from_string(template, globals=context)
     result = j_template.render()
     return result
