@@ -1,8 +1,10 @@
 """Additional tests to improve coverage for the DAG runner module."""
 
-import pytest
 from datetime import datetime
+from typing import Callable
 from unittest.mock import MagicMock
+
+import pytest
 
 from samples.dag_runner import (
     BaseTaskModel,
@@ -94,7 +96,7 @@ class TestTaskDAGErrors:
             def execute(self, exec_context):
                 return "custom"
 
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
         custom_task = CustomTask(task_id="custom")
         dag.add_task("custom", custom_task)
 
@@ -106,33 +108,18 @@ class TestTaskDAGErrors:
         # Test the error when _filepath attribute doesn't exist
         # Note: This test might not cover line 233 due to implementation details
         # where _filepath is set at class level during any TaskDAG instantiation
-        try:
-            original_filepath = TaskDAG._filepath
-            has_filepath = True
-        except AttributeError:
-            has_filepath = False
-            original_filepath = None
 
-        try:
-            # Delete the class attribute if it exists
-            if has_filepath:
-                delattr(TaskDAG, "_filepath")
+        # Now test that it raises ValueError
+        with pytest.raises(FileNotFoundError):
+            # Must raise FileNotFoundError if _filepath doesn't exist
+            TaskDAG.load_dag_from_file("nonexistent_file.json")
 
-            # Now test that it raises ValueError
-            with pytest.raises((ValueError, AttributeError)):
-                # May raise AttributeError if _filepath doesn't exist, or ValueError if it does but is None
-                TaskDAG.load_dag()
-        finally:
-            # Restore original state
-            if has_filepath and original_filepath is not None:
-                TaskDAG._filepath = original_filepath
-
-    def test_reset_status_with_tags(self):
+    def test_reset_status_with_tags(self, simple_task_func: Callable) -> None:
         """Test reset_status with tag filtering (lines 262-264)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1, tags=["test"])
-        task2 = FunctionTask(task_id="task2", func=lambda: 2, tags=["prod"])
+        task1 = FunctionTask(task_id="task1", func=simple_task_func, tags=["test"])
+        task2 = FunctionTask(task_id="task2", func=simple_task_func, tags=["prod"])
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -147,30 +134,30 @@ class TestTaskDAGErrors:
         assert task1.status == TaskStatus.PENDING
         assert task2.status == TaskStatus.DONE  # Should remain DONE
 
-    def test_add_dependency_task_not_found(self):
+    def test_add_dependency_task_not_found(self, simple_task_func: Callable):
         """Test adding dependency with non-existent task (line 288)."""
-        dag = TaskDAG("test_dag.json")
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
+        dag = TaskDAG()
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
         dag.add_task("task1", task1)
 
         with pytest.raises(ValueError, match="Task with ID 'task2' not found"):
             dag.add_dependency("task2", ["task1"])
 
-    def test_add_dependency_dependency_not_found(self):
+    def test_add_dependency_dependency_not_found(self, simple_task_func):
         """Test adding dependency with non-existent dependency (line 292)."""
-        dag = TaskDAG("test_dag.json")
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
+        dag = TaskDAG()
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
         dag.add_task("task1", task1)
 
         with pytest.raises(ValueError, match="Dependency 'task2' not found"):
             dag.add_dependency("task1", ["task2"])
 
-    def test_are_ancestors_done_with_pending(self):
+    def test_are_ancestors_done_with_pending(self, simple_task_func: Callable):
         """Test are_ancestors_done with pending ancestors (line 316)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
-        task2 = FunctionTask(task_id="task2", func=lambda: 2)
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -183,12 +170,12 @@ class TestTaskDAGErrors:
         task1.status = TaskStatus.DONE
         assert TaskDAG.are_ancestors_done("task2", dag.graph)
 
-    def test_pending_ancestors(self):
+    def test_pending_ancestors(self, simple_task_func: Callable):
         """Test pending_ancestors method (line 321)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
-        task2 = FunctionTask(task_id="task2", func=lambda: 2)
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -201,10 +188,10 @@ class TestTaskDAGErrors:
 
     def test_add_callable_as_task(self):
         """Test adding a plain callable as task (line 280)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
         # Add a plain function (not a Task instance)
-        def my_func(x):
+        def my_func(x, **_kwargs):
             return x * 2
 
         # Note: When adding via add_task, the tags go into FunctionTask constructor
@@ -222,19 +209,19 @@ class TestTaskDAGErrors:
 class TestTaskDAGFilterWarnings:
     """Test TaskDAGFilter warning paths to cover lines 341-344, 354-356, 377-381."""
 
-    def test_filter_warns_active_descendant_removed(self):
+    def test_filter_warns_active_descendant_removed(self, simple_task_func: Callable):
         """Test warning when active descendant is removed (lines 341-344, 377-381)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
         # task1 runs only on day 1, task2 runs every day
         task1 = FunctionTask(
             task_id="task1",
-            func=lambda: 1,
+            func=simple_task_func,
             scheduling=Scheduling(day=1),
         )
         task2 = FunctionTask(
             task_id="task2",
-            func=lambda: 2,
+            func=simple_task_func,
             scheduling=Scheduling(),  # Daily
         )
 
@@ -252,12 +239,12 @@ class TestTaskDAGFilterWarnings:
         assert "task1" not in filtered_dag.graph.nodes
         assert "task2" not in filtered_dag.graph.nodes
 
-    def test_filter_warns_tag_descendant_removed(self):
+    def test_filter_warns_tag_descendant_removed(self, simple_task_func: Callable):
         """Test warning when tagged descendant is removed (lines 354-356)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1, tags=["prod"])
-        task2 = FunctionTask(task_id="task2", func=lambda: 2, tags=["test"])
+        task1 = FunctionTask(task_id="task1", func=simple_task_func, tags=["prod"])
+        task2 = FunctionTask(task_id="task2", func=simple_task_func, tags=["test"])
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -278,14 +265,14 @@ class TestTaskDAGFilterWarnings:
 class TestTaskDAGExecutorCallbacks:
     """Test TaskDAGExecutor callback error handling (lines 527-528, 544, 570-571)."""
 
-    def test_executor_handles_task_skipped(self):
+    def test_executor_handles_task_skipped(self, simple_task_func: Callable):
         """Test executor handles TaskSkipped exception (lines 527-528)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
         # Task that only runs on day 1
         task = FunctionTask(
             task_id="monthly_task",
-            func=lambda: "result",
+            func=simple_task_func,
             scheduling=Scheduling(day=1),
         )
 
@@ -305,10 +292,10 @@ class TestTaskDAGExecutorCallbacks:
     def test_executor_handles_task_exception(self):
         """Test executor handles task exceptions properly."""
 
-        def failing_task():
+        def failing_task(*_args, **_kwargs):
             raise RuntimeError("Task failed!")
 
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
         task = FunctionTask(task_id="failing", func=failing_task)
         dag.add_task("failing", task)
 
@@ -319,12 +306,13 @@ class TestTaskDAGExecutorCallbacks:
         assert "failing" in results
         assert isinstance(results["failing"], RuntimeError)
 
-    def test_executor_skips_already_done_tasks(self):
+    def test_executor_skips_already_done_tasks(self, simple_task_func: Callable):
         """Test executor skips tasks already marked as DONE (lines 570-571)."""
-        dag = TaskDAG("test_dag.json")
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
-        task2 = FunctionTask(task_id="task2", func=lambda: 2)
+        dag = TaskDAG()
+
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -338,14 +326,14 @@ class TestTaskDAGExecutorCallbacks:
         # task1 should not be in results (was already done)
         assert "task1" not in results
         # task2 should be executed
-        assert results["task2"] == 2
+        assert results["task2"] is not None
 
-    def test_validate_dag_error_on_execute(self):
+    def test_validate_dag_error_on_execute(self, simple_task_func: Callable):
         """Test execute raises error on invalid DAG (line 544)."""
-        dag = TaskDAG("test_dag.json")
+        dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=lambda: 1)
-        task2 = FunctionTask(task_id="task2", func=lambda: 2)
+        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)

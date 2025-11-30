@@ -121,9 +121,12 @@ def test_detect_cycle():
 
 def test_task_execution():
     """Test executing a simple task."""
+    def func(x, **_kwargs):
+        return x * 2
+
     task = FunctionTask(
         task_id="test_task",
-        func=lambda x: x * 2,
+        func=func,
         args=(2,),
     )
     result = task.execute({"date": datetime.now().isoformat()})
@@ -166,13 +169,13 @@ def test_scheduling():
     assert task.scheduling.is_active_day(exec_date) is False
 
 
-def test_task_dag_executor():
+def test_task_dag_executor(simple_task_func: Callable):
     """Test the DAG executor with multiple tasks."""
-    dag = TaskDAG("test_dag.json")
+    dag = TaskDAG()
 
     # Create tasks
-    task1 = FunctionTask(task_id="task1", func=lambda: 1)
-    task2 = FunctionTask(task_id="task2", func=lambda x: x + 1, args=(1,))
+    task1 = FunctionTask(task_id="task1", func=simple_task_func)
+    task2 = FunctionTask(task_id="task2", func=simple_task_func)
 
     # Add tasks to DAG
     dag.add_task("task1", task1)
@@ -184,8 +187,8 @@ def test_task_dag_executor():
     results = executor.execute(exec_context={"date": datetime.now().isoformat()})
 
     # Verify results
-    assert results["task1"] == 1
-    assert results["task2"] == 2
+    assert results["task1"] == "Result for task1!"
+    assert results["task2"] == "Result for task2!"
     assert dag.get_task("task1").status == TaskStatus.DONE
     assert dag.get_task("task2").status == TaskStatus.DONE
 
@@ -193,15 +196,16 @@ def test_task_dag_executor():
 def test_save_and_load_dag(tmp_path):
     """Test saving and loading a DAG to/from a file."""
     # Create and save a DAG
-    filepath = tmp_path / "test_dag.json"
-    dag = TaskDAG(str(filepath))
+
+    dag = TaskDAG()
 
     task = FunctionTask(task_id="test_task", func=lambda: 1)
     dag.add_task("test_task", task)
     dag.save_dag()
+    dag.save_dag()
 
     # Load the DAG
-    loaded_dag = TaskDAG.load_dag(str(filepath))
+    loaded_dag = dag.load_dag()
 
     # Verify the loaded DAG
     assert "test_task" in loaded_dag.graph.nodes
@@ -213,7 +217,7 @@ def test_save_and_load_dag(tmp_path):
 @pytest.fixture
 def sample_dag(func_factory: Callable[[int, float], Callable[[], None]]):
     """Create a sample DAG for testing."""
-    dag = TaskDAG("test_dag.json")
+    dag = TaskDAG()
 
     # Create tasks
     task1 = FunctionTask(
@@ -365,19 +369,16 @@ def test_dag_execution_order_with_test_tag(sample_dag):
 def test_dag_save_and_load(sample_dag):
     """Test saving and loading a DAG to/from a file."""
     # Create and save a DAG
-    filepath = "test_dag.json"
     sample_dag.save_dag()
 
     # Load the DAG
-    loaded_dag = TaskDAG.load_dag(filepath)
+    loaded_dag = sample_dag.load_dag()
 
     assert loaded_dag.graph.number_of_nodes() == sample_dag.graph.number_of_nodes()
     assert loaded_dag.graph.number_of_edges() == sample_dag.graph.number_of_edges()
     assert loaded_dag.get_task("task1").task_id == "task1"
     assert loaded_dag.get_task("task2").task_id == "task2"
     assert loaded_dag.get_task("task3").task_id == "task3"
-    # remove file
-    os.remove(filepath)
 
 
 def test_scheduling_periodicity(sample_scheduled_dag):
