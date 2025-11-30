@@ -9,15 +9,19 @@ ensuring that all dependencies of a task are completed before the task itself ru
 from __future__ import annotations
 
 import json
+import random
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from enum import StrEnum
+from threading import Event
 from typing import (
     Any,
     Callable,
+    ClassVar,
     Dict,
     Generator,
     Generic,
@@ -37,6 +41,8 @@ from networkx.readwrite import json_graph
 from pydantic import BaseModel, model_validator
 from toolz import curry
 from typing_extensions import Protocol
+
+from samples.content_snapshot import ContentSnapshotStore
 
 T = TypeVar("T")
 
@@ -121,6 +127,46 @@ class BaseTaskModel(BaseModel, ABC):
         ...
 
 
+class SampleBackendCallableClient:
+    """Client to call backend functions.
+
+    It is used to call backend functions in a thread and publish a callback event.
+
+    :param exec_context: The execution context.
+    """
+
+    DEFAULT_TIMEOUT: ClassVar[int] = 60
+
+    def __init__(self, exec_context: dict[str, Any]) -> None:
+        self._exec_context = exec_context
+        self._callback_publisher: CallBackPublisher = exec_context.get(
+            "callback_publisher"
+        )
+        if not self._callback_publisher:
+            raise ValueError("Callback publisher not found in execution context")
+
+    def __call__(self, *args: Any, task_id: str, **kwargs: Any) -> Any:
+        try:
+            callback_event: CallBackEvent = self._callback_publisher.register_callback(
+                task_id
+            )
+            # run a thread that publish the callback event
+            thread = threading.Thread(target=self.publish_callback, args=(task_id,))
+            thread.start()
+            logger.debug(f"Waiting for callback event for task '{task_id}'")
+            callback_event.wait(timeout=SampleBackendCallableClient.DEFAULT_TIMEOUT)
+            logger.debug(f"Callback event for task '{task_id}' received!")
+            return callback_event.data
+        except Exception as e:
+            return e
+
+    def publish_callback(self, callback_id: str) -> None:
+        """Publish a callback event."""
+        # sleep for 1 to 5 seconds
+        time.sleep(random.random() * 1)
+        self._callback_publisher.publish(callback_id, {"result": "success"})
+
+
 class FunctionTask(BaseTaskModel, Generic[T]):
     """A task that wraps a callable function."""
 
@@ -136,7 +182,12 @@ class FunctionTask(BaseTaskModel, Generic[T]):
             if self.func_name:
                 self.func = globals().get(self.func_name)
             elif self.func:
-                self.func_name = self.func.__name__
+                # check if is a callable class instance
+                self.func_name = (
+                    self.func.__class__.__name__
+                    if hasattr(self.func, "__call__")
+                    else self.func.__name__
+                )
             else:
                 raise ValueError("Function name or function not provided")
         except AttributeError:
@@ -145,7 +196,6 @@ class FunctionTask(BaseTaskModel, Generic[T]):
 
     def execute(self, exec_context: dict[str, Any]) -> T:
         """Execute the wrapped function with stored arguments."""
-        res = None
         try:
             if "date" not in exec_context:
                 raise ValueError("Execution context must contain a 'date' field")
@@ -162,20 +212,69 @@ class FunctionTask(BaseTaskModel, Generic[T]):
                 f"'{self.func_name}' with args {self.args} and kwargs {self.kwargs}"
                 # f"\nExecution context: {exec_context}"
             )
-            res = self.func(*self.args, **kwargs)
+            res = self.func(*self.args, **kwargs, task_id=self.task_id)
             return res
         except Exception as e:
+            logger.error(f"Task '{self.task_id}' failed: {e}")
             raise e
         finally:
             self.status = TaskStatus.DONE
 
 
-class TaskDAG:
-    _filepath: str
+class CallBackEvent(Event):
+    """Event to signal a callback.
 
-    def __init__(self, store_filepath: str, init_graph: DiGraph = None):
-        TaskDAG._filepath = store_filepath
+    :param callback_id: The ID of the callback event.
+    """
+
+    def __init__(self, callback_id: str) -> None:
+        super().__init__()
+        self._callback_id = callback_id
+        self.data: dict[str, Any] | None = None
+
+    def check_callback(self, callback_id: str, result: dict[str, Any]) -> None:
+        """Check if the callback event is the one we are waiting for.
+        If it is, set the event and store the result.
+
+        :param callback_id: The ID of the callback event.
+        :param result: The result of the callback.
+        """
+        if self._callback_id == callback_id:
+            self.data = result
+            self.set()
+
+
+class CallBackPublisher:
+    """Publisher for callback events."""
+
+    def __init__(self) -> None:
+        self._events: dict[str, CallBackEvent] = {}
+
+    def register_callback(self, callback_id: str) -> CallBackEvent:
+        """Register a callback event.
+        :param callback_id: The ID of the callback event.
+        :return: The callback event.
+        """
+        if callback_id in self._events:
+            return self._events[callback_id]
+        event = CallBackEvent(callback_id)
+        self._events[callback_id] = event
+        return event
+
+    def publish(self, callback_id: str, result: dict[str, Any]) -> None:
+        """Publish a callback event.
+        :param callback_id: The ID of the callback event.
+        :param result: The result of the callback.
+        """
+        if callback_id in self._events:
+            self._events[callback_id].check_callback(callback_id, result)
+
+
+class TaskDAG:
+    def __init__(self, store_filepath: str = None, init_graph: DiGraph = None):
+        self._store_filepath = store_filepath
         self._graph = init_graph or nx.DiGraph()
+        self._snapshot_store = ContentSnapshotStore(base_path=store_filepath, temporary=True)
 
     @property
     def graph(self) -> DiGraph:
@@ -183,7 +282,8 @@ class TaskDAG:
 
     def copy(self) -> Self:
         return TaskDAG(
-            store_filepath=self._filepath, init_graph=self._graph.copy(as_view=False)
+            store_filepath=self._store_filepath,
+            init_graph=self._graph.copy(as_view=False),
         )
 
     # graph setter
@@ -224,24 +324,29 @@ class TaskDAG:
         # Convert to node-link format and save as JSON
         # noinspection PyArgumentList
         data = json_graph.node_link_data(graph, edges="edges")
-        with open(self._filepath, "w") as f:
-            json.dump(data, f, indent=2)
+        data_str = json.dumps(data, indent=2)
+        self._snapshot_store.store_snapshot("task_dag", data_str, "json")
 
     @classmethod
-    def load_dag(cls, filepath: str = None) -> Self:
-        if not any([filepath, cls._filepath]):
-            raise ValueError("No filepath provided")
-
-        filepath = filepath or cls._filepath
-
+    def load_dag_from_file(cls, filepath: str) -> Self:
         with open(filepath, "r") as f:
             data = json.load(f)
+        return cls._get_dag_from_json(data)
 
+    def load_dag(self) -> Self:
+        data_str = self._snapshot_store.load_snapshot("task_dag")
+        data = json.loads(data_str)
+        return self._get_dag_from_json(data, self._store_filepath)
+
+    @classmethod
+    def _get_dag_from_json(
+        cls, data: dict[str, Any], store_filepath: str = None
+    ) -> TaskDAG:
         # Reconstruct the graph
         graph = json_graph.node_link_graph(data, edges="edges")
 
         # Create a new TaskDag
-        dag = TaskDAG(store_filepath=filepath)
+        dag = TaskDAG(store_filepath=store_filepath)
 
         # Recreate tasks (simplified - you'll need to handle task recreation properly)
         for node_id, node_data in graph.nodes(data=True):
@@ -560,8 +665,10 @@ class TaskDAGExecutor:
         return self.results
 
     def _execute_generation(
-        self, exec_context: dict[str, Any], node_gen: Generator[str, None, None],
-        working_dag: TaskDAG
+        self,
+        exec_context: dict[str, Any],
+        node_gen: Generator[str, None, None],
+        working_dag: TaskDAG,
     ) -> None:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for node_id in node_gen:
