@@ -37,15 +37,22 @@ def sample_scheduled_dag_factory() -> Callable[[dict[str, Any]], TaskDAG]:
             func=func,  # Never fails
             scheduling=Scheduling(),
         )
+        task4 = FunctionTask(
+            task_id="task4",
+            func=func,  # Never fails
+            scheduling=Scheduling(),
+        )
 
         # Add tasks to DAG
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
         dag.add_task("task3", task3)
+        dag.add_task("task4", task4)
 
         # Add dependencies
         dag.add_dependency("task2", ["task1"])
-        dag.add_dependency("task3", ["task2"])
+        dag.add_dependency("task3", ["task1"])
+        dag.add_dependency("task4", ["task1"])
 
         return dag
     return factory
