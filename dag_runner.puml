@@ -1,0 +1,130 @@
+@startuml dag_runner_class_diagram
+
+' Enums
+class TaskStatus {
+  + PENDING
+  + SUBMITTED
+  + RUNNING
+  + SKIPPED
+  + DONE
+}
+
+' Base Classes and Interfaces
+interface Task<T> {
+  + task_id: str
+  + tags: list[str]
+  + status: TaskStatus | str
+  + scheduling: Scheduling
+  + {abstract} execute(exec_context: dict[str, Any]) -> T
+}
+
+' Pydantic Models with field details
+class Scheduling {
+  + day: int | None = None
+  + active_days: str = "mon-sun"
+  + periodicity: str
+  + is_active_day(date: datetime) -> bool
+  + get_numeric_week_days() -> list[int]
+}
+
+abstract class BaseTaskModel {
+  + task_id: str
+  + tags: list[str] = []
+  + status: TaskStatus = TaskStatus.PENDING
+  + scheduling: Scheduling | None = Scheduling()
+  + {abstract} execute(exec_context: dict[str, Any]) -> T
+}
+
+' Task Implementations
+class FunctionTask<T> {
+  + func_name: str | None = None
+  + func: Callable[..., T] | None = None
+  + args: tuple[Any, ...] = ()
+  + kwargs: dict[str, Any] = {}
+  + validate_func()
+  + execute(exec_context: dict[str, Any]) -> T
+}
+
+' Callback System
+class CallBackEvent {
+  + data: dict[str, Any] | None
+  + check_callback(callback_id: str, result: dict[str, Any])
+}
+
+class CallBackPublisher {
+  + _events: dict[str, CallBackEvent]
+  + register_callback(callback_id: str) -> CallBackEvent
+  + publish(callback_id: str, result: dict[str, Any])
+}
+
+class SampleBackendCallableClient {
+  + DEFAULT_TIMEOUT: ClassVar[int] = 60
+  + __call__(*args: Any, task_id: str, **kwargs: Any) -> Any
+  + publish_callback(callback_id: str)
+}
+
+' Main DAG Classes
+class TaskDAG {
+  - _graph: DiGraph
+  - _store_filepath: str | None
+  - _snapshot_store: ContentSnapshotStore
+  + graph: DiGraph
+  + copy() -> Self
+  + get_task(task_id: str) -> Task
+  + tasks() -> Iterable[tuple[str, Task]]
+  + save_dag()
+  + load_dag() -> Self
+  + add_task(task_id: str, task: Union[Task[T], Callable[..., T]], ...)
+  + add_dependency(task_id: str, depends_on: List[str])
+  + validate(working_graph: DiGraph = None) -> bool
+}
+
+class TaskDAGFilter {
+  - _dag: TaskDAG
+  - _filter_context: FilterContext
+  + filter()
+  + filter_nodes_by_active_day(working_dag: TaskDAG)
+  + filter_nodes_by_tags(working_dag: TaskDAG)
+}
+
+class TaskDAGExecutor {
+  - _dag: TaskDAG
+  - _pool_workers_semaphore: threading.Semaphore
+  - _result_event: threading.Event
+  - _lock: threading.Lock
+  + results: OrderedDict[str, Any]
+  + wait_for_tasks_results(node_id: str, graph: DiGraph, timeout: float = None)
+  + get_secure_node_generator(graph: DiGraph, max_node_retries: int = 0)
+  + execute(exec_context: dict[str, Any], tags: list[str] = None)
+}
+
+' Relationships
+' Inheritance/Implementation
+BaseTaskModel ..|> Task
+FunctionTask --|> BaseTaskModel
+CallBackEvent --|> Event
+TaskDAGFilter --> TaskDAG
+
+' Composition/Aggregation
+CallBackPublisher o-- "*" CallBackEvent : _events
+SampleBackendCallableClient --> CallBackPublisher
+TaskDAG --> Task
+TaskDAGExecutor o-- TaskDAG : _dag
+
+' Pydantic Model Relationships
+note right of Scheduling
+  Pydantic Model
+end note
+
+note right of BaseTaskModel
+  Pydantic Model
+end note
+
+note right of FunctionTask
+  Pydantic Model
+end note
+
+BaseTaskModel *-- Scheduling : scheduling
+BaseTaskModel *-- TaskStatus : status
+
+@enduml
