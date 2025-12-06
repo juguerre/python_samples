@@ -121,6 +121,7 @@ def test_detect_cycle():
 
 def test_task_execution():
     """Test executing a simple task."""
+
     def func(x, **_kwargs):
         return x * 2
 
@@ -137,8 +138,8 @@ def test_task_execution():
 def test_filter_by_tags():
     """Test filtering tasks by tags."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", func=lambda: 1, tags=["test"])
-    task2 = FunctionTask(task_id="task2", func=lambda: 2, tags=["prod"])
+    task1 = FunctionTask(task_id="task1", func=lambda x: 1, tags=["test"])
+    task2 = FunctionTask(task_id="task2", func=lambda x: 2, tags=["prod"])
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)
@@ -261,11 +262,11 @@ def generate_cpu_load(duration_seconds: float) -> None:
 
 @pytest.fixture
 def func_factory() -> Callable:
-    def get_task_func(max_time: int, exception_prob: float) -> Callable[[], None]:
-        def func():
+    def get_task_func(max_time: int, exception_prob: float) -> Callable[[str], None]:
+        def func(task_id: str):
             generate_cpu_load(random.random() * max_time)
             if random.random() < exception_prob:
-                raise Exception("Task failed")
+                raise Exception(f"Task {task_id} failed")
 
         return func
 
@@ -411,7 +412,7 @@ def test_scheduling_periodicity(sample_scheduled_dag):
     assert sample_scheduled_dag.get_task("task2").scheduling.periodicity == "weekly"
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 def test_scheduling_performance(
     sample_dag_factory: Callable[[int, int, float], TaskDAG],
 ):

@@ -274,7 +274,9 @@ class TaskDAG:
     def __init__(self, store_filepath: str = None, init_graph: DiGraph = None):
         self._store_filepath = store_filepath
         self._graph = init_graph or nx.DiGraph()
-        self._snapshot_store = ContentSnapshotStore(base_path=store_filepath, temporary=True)
+        self._snapshot_store = ContentSnapshotStore(
+            base_path=store_filepath, temporary=True
+        )
 
     @property
     def graph(self) -> DiGraph:
@@ -637,6 +639,8 @@ class TaskDAGExecutor:
             logger.error(f"{task_id}: failed with exec_context: {exec_context}")
         finally:
             with self._lock:
+                # set event to notify that a task is done. That is necesary for
+                # wait_for_tasks_results() to continue if blocked.
                 self._result_event.set()
                 self._result_event.clear()
                 # release semaphore to allow pool to submit more tasks
@@ -676,13 +680,17 @@ class TaskDAGExecutor:
                 if task.status == TaskStatus.DONE:
                     logger.info(f"{task.task_id}: already done, skipping")
                     continue
-                task.status = TaskStatus.SUBMITTED
+
+                # acquire semaphore to limit number of tasks submitted to the executor
+                # with no semaphore, all tasks are submitted to the executor immediately
                 self._pool_workers_semaphore.acquire()
+                task.status = TaskStatus.SUBMITTED
                 executor.submit(
                     task.execute, exec_context=exec_context
                 ).add_done_callback(
                     self.done_callback(task_id=task.task_id, exec_context=exec_context)
                 )
+                # log current number of active workers
                 logger.debug(
                     f"Active workers: {self.max_workers - self._pool_workers_semaphore._value}"
                 )
