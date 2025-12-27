@@ -8,7 +8,7 @@ from samples.task_flow_parser import parse_task_expression
 
 def test_object_task_index():
     """Test parsing with object task index."""
-    func_task = FunctionTask(task_id="task1", func=lambda x: x, tags=["tag1", "tag2"])
+    func_task = FunctionTask(task_id="task1", _cached_func=lambda x: x, tags=["tag1", "tag2"])
     task_index = {
         "task1": func_task,
         "task2": "task2",

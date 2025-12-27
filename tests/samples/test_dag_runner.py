@@ -1,10 +1,10 @@
 """Tests for the DAG runner module."""
 
 import math
-import os
 import random
 import time
 from datetime import datetime, timedelta
+from functools import wraps
 from typing import Callable, Literal
 
 import pytest
@@ -19,6 +19,10 @@ from samples.dag_runner import (
 )
 
 
+def func(_task_id: str) -> int:
+    return 1
+
+
 def get_next_weekday(
     weekday: Literal[
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
@@ -28,7 +32,8 @@ def get_next_weekday(
     Get the next occurrence of the specified weekday.
 
     :param weekday: The target weekday (full name in lowercase)
-    :type weekday: Literal['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    :type weekday: Literal['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday',
+    'sunday']
     :return: A datetime object representing the next occurrence of the specified weekday at midnight
     :rtype: datetime
     """
@@ -61,7 +66,7 @@ def test_create_task():
     """Test creating a basic task."""
     task = FunctionTask(
         task_id="test_task",
-        func=lambda: "test",
+        _cached_func=lambda: "test",
         tags=["test"],
     )
     assert task.task_id == "test_task"
@@ -72,7 +77,7 @@ def test_create_task():
 def test_add_task_to_dag():
     """Test adding a task to the DAG."""
     dag = TaskDAG("test_dag.json")
-    task = FunctionTask(task_id="task1", func=lambda: 1)
+    task = FunctionTask(task_id="task1", _cached_func=lambda: 1)
     dag.add_task("task1", task)
 
     assert "task1" in dag.graph.nodes
@@ -82,8 +87,8 @@ def test_add_task_to_dag():
 def test_add_dependency():
     """Test adding a dependency between tasks."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", func=lambda: 1)
-    task2 = FunctionTask(task_id="task2", func=lambda: 2)
+    task1 = FunctionTask(task_id="task1", _cached_func=lambda: 1)
+    task2 = FunctionTask(task_id="task2", _cached_func=lambda: 2)
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)
@@ -95,8 +100,8 @@ def test_add_dependency():
 def test_validate_dag():
     """Test DAG validation."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", func=lambda: 1)
-    task2 = FunctionTask(task_id="task2", func=lambda: 2)
+    task1 = FunctionTask(task_id="task1", _cached_func=lambda: 1)
+    task2 = FunctionTask(task_id="task2", _cached_func=lambda: 2)
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)
@@ -108,8 +113,8 @@ def test_validate_dag():
 def test_detect_cycle():
     """Test cycle detection in the DAG."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", func=lambda: 1)
-    task2 = FunctionTask(task_id="task2", func=lambda: 2)
+    task1 = FunctionTask(task_id="task1", _cached_func=lambda: 1)
+    task2 = FunctionTask(task_id="task2", _cached_func=lambda: 2)
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)
@@ -122,12 +127,12 @@ def test_detect_cycle():
 def test_task_execution():
     """Test executing a simple task."""
 
-    def func(x, **_kwargs):
+    def funct(x, **_kwargs):
         return x * 2
 
     task = FunctionTask(
         task_id="test_task",
-        func=func,
+        _cached_func=funct,
         args=(2,),
     )
     result = task.execute({"date": datetime.now().isoformat()})
@@ -138,8 +143,8 @@ def test_task_execution():
 def test_filter_by_tags():
     """Test filtering tasks by tags."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", func=lambda x: 1, tags=["test"])
-    task2 = FunctionTask(task_id="task2", func=lambda x: 2, tags=["prod"])
+    task1 = FunctionTask(task_id="task1", _cached_func=lambda x: 1, tags=["test"])
+    task2 = FunctionTask(task_id="task2", _cached_func=lambda x: 2, tags=["prod"])
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)
@@ -157,7 +162,7 @@ def test_scheduling():
     # Create a task that only runs on the 1st of the month
     task = FunctionTask(
         task_id="monthly_task",
-        func=lambda: "monthly",
+        _cached_func=lambda: "monthly",
         scheduling=Scheduling(day=1),
     )
 
@@ -175,8 +180,8 @@ def test_task_dag_executor(simple_task_func: Callable):
     dag = TaskDAG()
 
     # Create tasks
-    task1 = FunctionTask(task_id="task1", func=simple_task_func)
-    task2 = FunctionTask(task_id="task2", func=simple_task_func)
+    task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
+    task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func)
 
     # Add tasks to DAG
     dag.add_task("task1", task1)
@@ -200,7 +205,7 @@ def test_save_and_load_dag(tmp_path):
 
     dag = TaskDAG()
 
-    task = FunctionTask(task_id="test_task", func=lambda: 1)
+    task = FunctionTask(task_id="test_task", _cached_func=func)
     dag.add_task("test_task", task)
     dag.save_dag()
     dag.save_dag()
@@ -223,18 +228,18 @@ def sample_dag(func_factory: Callable[[int, float], Callable[[], None]]):
     # Create tasks
     task1 = FunctionTask(
         task_id="task1",
-        func=func_factory(0, 0.0),  # Never fails
+        _cached_func=func_factory(0, 0.0),  # Never fails
         tags=["test"],
     )
     task2 = FunctionTask(
         task_id="task2",
-        func=func_factory(0, 1.0),  # Always fails
+        _cached_func=func_factory(0, 1.0),  # Always fails
         args=(1,),
         tags=["test"],
     )
     task3 = FunctionTask(
         task_id="task3",
-        func=lambda x: x * 2,
+        _cached_func=func,
         args=(2,),
         tags=["prod"],
     )
@@ -260,15 +265,20 @@ def generate_cpu_load(duration_seconds: float) -> None:
             x += math.sqrt(i)
 
 
+def virtual_func_for_func_factory(_task_id: str):
+    pass
+
+
 @pytest.fixture
 def func_factory() -> Callable:
     def get_task_func(max_time: int, exception_prob: float) -> Callable[[str], None]:
-        def func(task_id: str):
+        @wraps(virtual_func_for_func_factory)
+        def funct(task_id: str):
             generate_cpu_load(random.random() * max_time)
             if random.random() < exception_prob:
                 raise Exception(f"Task {task_id} failed")
 
-        return func
+        return funct
 
     return get_task_func
 
@@ -282,7 +292,7 @@ def sample_dag_factory(func_factory: Callable) -> Callable[[int, int, float], Ta
         for i in range(n):
             task = FunctionTask(
                 task_id=f"task{i}",
-                func=func_factory(max_sleep, exception_prob),
+                _cached_func=func_factory(max_sleep, exception_prob),
                 tags=["test"],
             )
             dag.add_task(f"task{i}", task)
@@ -310,20 +320,20 @@ def sample_scheduled_dag(
     # Create tasks
     task1 = FunctionTask(
         task_id="task1",
-        func=func_factory(1, 0.0),  # Never fails
+        _cached_func=func_factory(1, 0.0),  # Never fails
         tags=["test"],
         scheduling=Scheduling(day=1),
     )
     task2 = FunctionTask(
         task_id="task2",
-        func=func_factory(1, 1.0),  # Always fails
+        _cached_func=func_factory(1, 1.0),  # Always fails
         args=(1,),
         tags=["test"],
         scheduling=Scheduling(active_days="wed"),
     )
     task3 = FunctionTask(
         task_id="task3",
-        func=func_factory(1, 0.0),  # Never fails
+        _cached_func=func_factory(1, 0.0),  # Never fails
         args=(2,),
         tags=["prod"],
         scheduling=Scheduling(),

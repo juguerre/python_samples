@@ -8,6 +8,8 @@ ensuring that all dependencies of a task are completed before the task itself ru
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
 import random
 import threading
@@ -27,6 +29,7 @@ from typing import (
     Generic,
     Iterable,
     List,
+    Literal,
     Self,
     TypeVar,
     Union,
@@ -38,7 +41,7 @@ import toolz
 from loguru import logger
 from networkx import DiGraph
 from networkx.readwrite import json_graph
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, Field
 from toolz import curry
 from typing_extensions import Protocol
 
@@ -169,30 +172,75 @@ class SampleBackendCallableClient:
 
 class FunctionTask(BaseTaskModel, Generic[T]):
     """A task that wraps a callable function."""
-
+    retries: int = Field(default=0, ge=0)
+    model_type: Literal["function_task"] = "function_task"
     func_name: str | None = None
-    func: Callable[..., T] | None = None
+    _cached_func: Callable[..., T] | None = None
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = {}
 
-    @model_validator(mode="after")
-    def validate_func(self):
-        """Sets func field as callable"""
-        try:
-            if self.func_name:
-                self.func = globals().get(self.func_name)
-            elif self.func:
-                # check if is a callable class instance
-                self.func_name = (
-                    self.func.__class__.__name__
-                    if hasattr(self.func, "__call__")
-                    else self.func.__name__
+    def __init__(self, **data):
+        # Extract private attributes before calling super().__init__
+        cached_func = data.pop("_cached_func", None)
+
+        # Initialize the model with public fields
+        super().__init__(**data)
+        self._set_func_attr(cached_func)
+
+    def _set_func_attr(self, cached_func: Callable[..., T]):
+        # Set private attribute after initialization
+        if cached_func is not None and self.func_name is None:
+            self._cached_func = cached_func
+            if not inspect.isfunction(self._cached_func):  # callable class
+                self.func_name = ".".join(
+                    [self._cached_func.__module__, self._cached_func.__class__.__name__]
                 )
-            else:
-                raise ValueError("Function name or function not provided")
-        except AttributeError:
-            raise ValueError(f"Function '{self.func_name}' not found")
-        return self
+            else:  # common function
+                module: str = getattr(cached_func, "__module__", "")
+                name: str = getattr(cached_func, "__name__", "")
+                self.func_name = ":".join([module, name])
+
+        elif cached_func is not None and self.func_name is not None:
+            raise ValueError(
+                "Function name and cached function cannot be both provided"
+            )
+        elif self.func_name is None and self._cached_func is None:
+            raise ValueError("Function name or cached function must be provided")
+
+    @property
+    def func(self) -> Callable[..., T]:
+        if not self._cached_func and self.func_name and ":" in self.func_name:
+            module_name, func_name = self.func_name.rsplit(":", 1)
+            module = importlib.import_module(module_name)
+            self._cached_func = getattr(module, func_name)
+        elif (
+            not self._cached_func and self.func_name and "." in self.func_name
+        ):  # callable class
+            module_name, class_name = self.func_name.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            func = getattr(module, class_name)()
+            self._cached_func = func
+        return self._cached_func
+
+    @field_validator("func_name", mode="after")
+    @classmethod
+    def validate_func_name(cls, v):
+        if "." not in v and ":" not in v:
+            raise ValueError(
+                "Function name must be in the format 'module:function' or 'module.class'"
+            )
+        # check if function exists
+        module_name, func_name = v.rsplit(":", 1)
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            raise ValueError(f"Module '{module_name}' not found")
+        if not hasattr(module, func_name):
+            raise ValueError(
+                f"Function '{func_name}' not found in module '{module_name}'"
+            )
+
+        return v
 
     def execute(self, exec_context: dict[str, Any]) -> T:
         """Execute the wrapped function with stored arguments."""
@@ -212,7 +260,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
                 f"'{self.func_name}' with args {self.args} and kwargs {self.kwargs}"
                 # f"\nExecution context: {exec_context}"
             )
-            res = self.func(*self.args, **kwargs, task_id=self.task_id)
+            res = self._cached_func(*self.args, **kwargs, task_id=self.task_id)
             return res
         except Exception as e:
             logger.error(f"Task '{self.task_id}' failed: {e}")
@@ -385,7 +433,11 @@ class TaskDAG:
         # If task is a callable but not a Task, wrap it in a FunctionTask
         if callable(task) and not isinstance(task, Task):
             task = FunctionTask(
-                task_id=task_id, func=task, args=args, kwargs=kwargs, tags=tags or []
+                task_id=task_id,
+                _cached_func=task,
+                args=args,
+                kwargs=kwargs,
+                tags=tags or [],
             )
 
         self._graph.add_node(task_id, task=task)

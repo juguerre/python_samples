@@ -48,20 +48,17 @@ class TestFunctionTaskErrors:
 
     def test_function_task_missing_function(self):
         """Test error when neither func_name nor func is provided (line 141)."""
-        with pytest.raises(ValueError, match="Function name or function not provided"):
+        with pytest.raises(ValueError):
             FunctionTask(task_id="test_task")
 
     def test_function_task_invalid_func_name(self):
         """Test error when func_name doesn't exist (lines 142-143)."""
-        # When func_name is provided but doesn't exist in globals(),
-        # it returns None and func is set to None (no AttributeError raised)
-        task = FunctionTask(task_id="test_task", func_name="nonexistent_func")
-        # The func will be None since it wasn't found in globals()
-        assert task.func is None
+        with pytest.raises(ValueError):
+            FunctionTask(task_id="test_task", func_name="module:nonexistent_func")
 
     def test_execute_without_date_context(self):
         """Test execution without date in context (line 151)."""
-        task = FunctionTask(task_id="test_task", func=lambda: 1)
+        task = FunctionTask(task_id="test_task", _cached_func=lambda: 1)
         with pytest.raises(
             ValueError, match="Execution context must contain a 'date' field"
         ):
@@ -72,7 +69,7 @@ class TestFunctionTaskErrors:
         # Create a task only for day 1 of the month
         task = FunctionTask(
             task_id="monthly_task",
-            func=lambda: "result",
+            _cached_func=lambda: "result",
             scheduling=Scheduling(day=1),
         )
 
@@ -118,8 +115,8 @@ class TestTaskDAGErrors:
         """Test reset_status with tag filtering (lines 262-264)."""
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func, tags=["test"])
-        task2 = FunctionTask(task_id="task2", func=simple_task_func, tags=["prod"])
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func, tags=["test"])
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func, tags=["prod"])
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -137,7 +134,7 @@ class TestTaskDAGErrors:
     def test_add_dependency_task_not_found(self, simple_task_func: Callable):
         """Test adding dependency with non-existent task (line 288)."""
         dag = TaskDAG()
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
         dag.add_task("task1", task1)
 
         with pytest.raises(ValueError, match="Task with ID 'task2' not found"):
@@ -146,7 +143,7 @@ class TestTaskDAGErrors:
     def test_add_dependency_dependency_not_found(self, simple_task_func):
         """Test adding dependency with non-existent dependency (line 292)."""
         dag = TaskDAG()
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
         dag.add_task("task1", task1)
 
         with pytest.raises(ValueError, match="Dependency 'task2' not found"):
@@ -156,8 +153,8 @@ class TestTaskDAGErrors:
         """Test are_ancestors_done with pending ancestors (line 316)."""
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
-        task2 = FunctionTask(task_id="task2", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -174,8 +171,8 @@ class TestTaskDAGErrors:
         """Test pending_ancestors method (line 321)."""
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
-        task2 = FunctionTask(task_id="task2", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -216,12 +213,12 @@ class TestTaskDAGFilterWarnings:
         # task1 runs only on day 1, task2 runs every day
         task1 = FunctionTask(
             task_id="task1",
-            func=simple_task_func,
+            _cached_func=simple_task_func,
             scheduling=Scheduling(day=1),
         )
         task2 = FunctionTask(
             task_id="task2",
-            func=simple_task_func,
+            _cached_func=simple_task_func,
             scheduling=Scheduling(),  # Daily
         )
 
@@ -243,8 +240,8 @@ class TestTaskDAGFilterWarnings:
         """Test warning when tagged descendant is removed (lines 354-356)."""
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func, tags=["prod"])
-        task2 = FunctionTask(task_id="task2", func=simple_task_func, tags=["test"])
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func, tags=["prod"])
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func, tags=["test"])
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -272,7 +269,7 @@ class TestTaskDAGExecutorCallbacks:
         # Task that only runs on day 1
         task = FunctionTask(
             task_id="monthly_task",
-            func=simple_task_func,
+            _cached_func=simple_task_func,
             scheduling=Scheduling(day=1),
         )
 
@@ -296,7 +293,7 @@ class TestTaskDAGExecutorCallbacks:
             raise RuntimeError("Task failed!")
 
         dag = TaskDAG()
-        task = FunctionTask(task_id="failing", func=failing_task)
+        task = FunctionTask(task_id="failing", _cached_func=failing_task)
         dag.add_task("failing", task)
 
         executor = TaskDAGExecutor(dag, max_workers=1)
@@ -311,8 +308,8 @@ class TestTaskDAGExecutorCallbacks:
 
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
-        task2 = FunctionTask(task_id="task2", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)
@@ -332,8 +329,8 @@ class TestTaskDAGExecutorCallbacks:
         """Test execute raises error on invalid DAG (line 544)."""
         dag = TaskDAG()
 
-        task1 = FunctionTask(task_id="task1", func=simple_task_func)
-        task2 = FunctionTask(task_id="task2", func=simple_task_func)
+        task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
+        task2 = FunctionTask(task_id="task2", _cached_func=simple_task_func)
 
         dag.add_task("task1", task1)
         dag.add_task("task2", task2)

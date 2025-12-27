@@ -24,22 +24,22 @@ def sample_scheduled_dag_factory() -> Callable[[dict[str, Any]], TaskDAG]:
         # Create tasks
         task1 = FunctionTask(
             task_id="task1",
-            func=func,
+            _cached_func=func,
             scheduling=Scheduling(),
         )
         task2 = FunctionTask(
             task_id="task2",
-            func=func,  # Always fails
+            _cached_func=func,  # Always fails
             scheduling=Scheduling(),
         )
         task3 = FunctionTask(
             task_id="task3",
-            func=func,  # Never fails
+            _cached_func=func,  # Never fails
             scheduling=Scheduling(),
         )
         task4 = FunctionTask(
             task_id="task4",
-            func=func,  # Never fails
+            _cached_func=func,  # Never fails
             scheduling=Scheduling(),
         )
 
