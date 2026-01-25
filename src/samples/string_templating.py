@@ -144,6 +144,7 @@ env = ImmutableSandboxedEnvironment(loader=BaseLoader(), undefined=StrictUndefin
 env.filters.update(SAFE_OPERATIONS)
 
 
+# noinspection PyUnresolvedReferences
 def process_jinja2_template(template: str, context: dict[str, Any]) -> str:
     """Processes a Jinja2 template with the given context
 
@@ -151,7 +152,6 @@ def process_jinja2_template(template: str, context: dict[str, Any]) -> str:
     'Hello World!'
     >>> process_jinja2_template("Today is {{ today | date }}", {"today": datetime.date(2023, 1, 1)})
     'Today is 2023-01-01'
-
 
     :param template: Jinja2 template
     :param context: context for the template
