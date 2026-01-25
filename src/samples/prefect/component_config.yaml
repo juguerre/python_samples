@@ -1,0 +1,88 @@
+
+work_pools:
+  pool1:
+    name: pool1
+    work_queue_name: null
+    job_variables: { }
+
+pulls:
+  # this is expected to be related to the component, may be a gitlab or github repo
+  pull_config_1:
+    steps:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /home/juguerre/dev/repos/python_samples
+
+
+default_work_pool: pool1
+default_pull_config: pull_config_1
+
+jobs:
+  sample_job:  # this a prefect flow with a implicit deploy config
+    etl1_ppl:  # this a prefect subflow
+      model_type: etl_pipeline
+      prefect_deploy:  # this is an explicit subflow deployment config
+        # with this config a deployment to prefect server could be created
+        # All this config should be generated automatically from the component config
+        # All params could be derived form etl1_ppl pipeline or taken from a default config
+        deploy_name: etl1_ppl
+        source: "/home/juguerre/dev/repos/python_samples"
+        func_name: samples.prefect.sample_funcs:generic_etl_flow
+        # entrypoints for a specific flow like 'etl_pipeline' should be generic
+        entrypoint: src/samples/prefect/sample_funcs.py:generic_etl_flow
+        work_pool_id: pool1  # default
+        pull_config_id: pull_config_1  # default
+
+      # implicit sequencial extract >> transform >> load, data validations for data_sources and data_products, etc.
+      extract:
+        parallel: true  # Default for extract task
+        generate_cache: false
+        tasks:
+          task1:
+            model_type: elastic_extract_task  # Inherits from BaseExtractTask model
+            data_source: SOURCE_00001  # reference to metadata catalog.
+            retries: 1
+            index: my_index_01
+            filter:
+              xxx: aaa
+          task2:
+            retries: 1
+            model_type: csv_extract_task
+            data_source: SOURCE_00002
+            path: ./input_files/file1.csv
+          task3:
+            retries: 1
+            model_type: python_extract_task
+            func_name: samples.prefect.sample_funcs:python_extract
+            data_source: SOURCE_00003
+      transform:
+        tasks:
+          task1:
+            model_type: mapping_task  # inherits from BaseTransformTask model
+            field_mapping:
+              SOURCE_00001:
+                map_all: false
+                mapping:
+                  NEW_FIELD1: orig_field1
+                  NEW_FIELD2: orig_field2
+              SOURCE_00002:
+                map_all: false
+                mapping:
+                  NEW_FIELD1: orig_field1
+                  NEW_FIELD2: orig_field2
+              SOURCE_00003:
+                map_all: false
+                mapping:
+                  NEW_FIELD1: orig_field1
+                  NEW_FIELD2: orig_field2
+          task2:
+            model_type: python_transform_task
+            func_name: samples.prefect.sample_funcs:python_transform
+            params:
+              from_date: "{ { isodate | week_before | madrid_tz | date } }"  # use filters to process first "isodate" global_var
+      load:
+        tasks:
+          task1:
+            model_type: db_load_task
+            table: ADSGOV_00001_OUTPUT
+            data_asset: ADSGOV_00001_OUTPUT
+            connection_id: xxx   # this can default to the default connection of the db client.

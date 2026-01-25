@@ -1,0 +1,56 @@
+# Generic metadata about this project
+name: python_samples
+prefect-version: 3.6.5
+
+# build section allows you to manage and build docker images
+build: null
+
+# push section allows you to manage if and how this project is uploaded to remote locations
+push: null
+
+# pull section allows you to provide instructions for cloning this project in remote locations
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /home/juguerre/dev/repos/python_samples
+
+deployments:
+  - name: data-pipeline
+    entrypoint: src/samples/prefect/simple_wf.py:etl
+    parameters:
+      # This is the external config setting for the whole flow
+      api_base: "https://dev.to/api"
+      pages: 3
+      per_page: 30
+      output_file: "devto_articles.csv"
+    work_pool:
+      name: pool1
+      work_queue_name: null
+      job_variables: { }
+    schedules: [ ]
+
+  - name: dynamic-pipeline
+    entrypoint: src/samples/prefect/dynamic_wf.py:dynamic_flow
+    parameters:
+      # This is the external config setting for the whole flow
+      tasks:
+        - task_1
+        - task_2
+    work_pool:
+      name: pool1
+      work_queue_name: null
+      job_variables: { }
+    schedules: [ ]
+
+  - name: dynamic-dag-pipeline
+    entrypoint: src/samples/prefect/dynamic_dag_wf.py:dynamic_dag_flow
+    parameters:
+      # This is the external config setting for the whole flow
+      dag_def: "task_1 >> [task_2, task_3]"
+    work_pool:
+      name: pool1
+      work_queue_name: null
+      job_variables: { }
+    schedules: [ ]
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /home/juguerre/dev/repos/python_samples
