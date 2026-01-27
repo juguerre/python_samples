@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from httpx import Response
 from pydantic import BaseModel, HttpUrl, ValidationError, field_validator
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity.wait import wait_base
 
 # ensure .env is load as env vars
 load_dotenv()
@@ -100,6 +101,39 @@ class HttpApiError(HttpClientError):
         self.response_text = response_text
 
 
+class HttpRateLimitError(HttpApiError):
+    """Exception for 429 Too Many Requests"""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int,
+        response_text: str,
+        retry_after: float | None = None,
+    ) -> None:
+        """Initialize the rate limit error.
+
+        :param retry_after: Minimum seconds to wait before next attempt.
+        """
+        super().__init__(message, status_code, response_text)
+        self.retry_after = retry_after
+
+
+class wait_for_rate_limit(wait_base):
+    """Custom tenacity wait strategy that honors Retry-After headers"""
+
+    def __init__(self, fallback: wait_base):
+        self.fallback = fallback
+
+    def __call__(self, retry_state: Any) -> float:
+        if retry_state.outcome.failed:
+            ex = retry_state.outcome.exception()
+            if isinstance(ex, HttpRateLimitError) and ex.retry_after is not None:
+                # Return the suggested wait time plus a small 500ms jitter/buffer
+                return ex.retry_after + 0.5
+        return self.fallback(retry_state)
+
+
 class HttpValidationError(HttpClientError):
     """Exception for validation errors"""
 
@@ -176,8 +210,10 @@ class BaseHttpClient:
         return isinstance(exception, (httpx.RequestError, httpx.HTTPStatusError))
 
     RETRY_CONFIG: ClassVar[dict[str, Any]] = {
-        "stop": stop_after_attempt(3),
-        "wait": wait_exponential(multiplier=1, min=2, max=10),
+        "stop": stop_after_attempt(5),
+        "wait": wait_for_rate_limit(
+            fallback=wait_exponential(multiplier=1, min=2, max=10)
+        ),
         "retry": retry_if_exception(_is_transient_error),
         "reraise": True,
     }
@@ -236,6 +272,32 @@ class BaseHttpClient:
 
     @staticmethod
     def _handle_response_error(response: Response) -> None:
+        if response.status_code == 429:
+            # Try to determine how long to wait
+            retry_after = response.headers.get("Retry-After")
+            reset_time = response.headers.get("X-RateLimit-Reset")
+            wait_seconds = None
+
+            try:
+                if retry_after:
+                    wait_seconds = float(retry_after)
+                elif reset_time:
+                    # Parse epoch timestamp from GitHub header
+                    wait_seconds = max(0.0, float(reset_time) - datetime.now().timestamp())
+            except (ValueError, TypeError):
+                pass
+
+            logger.warning(
+                f"Rate limit hit on {response.url}. "
+                f"Wait suggested: {wait_seconds if wait_seconds is not None else 'unknown'}"
+            )
+            raise HttpRateLimitError(
+                message="Rate limit exceeded",
+                status_code=429,
+                response_text=response.text,
+                retry_after=wait_seconds,
+            )
+
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:

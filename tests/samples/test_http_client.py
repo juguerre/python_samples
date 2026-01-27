@@ -14,7 +14,9 @@ from samples.http_client import (
     GitHubRepo,
     GitHubUser,
     HttpApiError,
+    HttpRateLimitError,
     HttpValidationError,
+    wait_for_rate_limit,
 )
 
 
@@ -167,6 +169,58 @@ class TestBaseHttpClient:
         # Test that custom HttpValidationError is raised
         with pytest.raises(HttpValidationError):
             base_client._get(url="/invalid", model_class=GitHubUser)
+
+    def test_get_rate_limit_error_retry_after(self, base_client: BaseHttpClient) -> None:
+        """Test 429 error with Retry-After header."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "0.1"}
+        mock_response.text = "Too Many Requests"
+        base_client.client.get.return_value = mock_response
+
+        with pytest.raises(HttpRateLimitError) as excinfo:
+            base_client._get(url="/rate-limit", model_class=GitHubUser)
+
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.retry_after == 0.1
+
+    def test_get_rate_limit_error_github_reset(self, base_client: BaseHttpClient) -> None:
+        """Test 429 error with GitHub X-RateLimit-Reset header."""
+        # Reset time 1 second in the future
+        future_reset = datetime.now().timestamp() + 1
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.headers = {"X-RateLimit-Reset": str(future_reset)}
+        mock_response.text = "Rate limit exceeded"
+        base_client.client.get.return_value = mock_response
+
+        with pytest.raises(HttpRateLimitError) as excinfo:
+            base_client._get(url="/rate-limit", model_class=GitHubUser)
+
+        assert excinfo.value.status_code == 429
+        # Should be roughly 1 second
+        assert 0 <= excinfo.value.retry_after <= 1.1
+
+    def test_wait_for_rate_limit_logic(self) -> None:
+        """Test the custom wait strategy logic directly."""
+        mock_fallback = MagicMock()
+        mock_fallback.return_value = 1.0
+        strategy = wait_for_rate_limit(fallback=mock_fallback)
+
+        # Case 1: Failed with HttpRateLimitError and retry_after
+        mock_retry_state = MagicMock()
+        error = HttpRateLimitError("Limit", 429, "body", retry_after=5.0)
+        mock_retry_state.outcome.failed = True
+        mock_retry_state.outcome.exception.return_value = error
+
+        wait_time = strategy(mock_retry_state)
+        assert wait_time == 5.5  # 5.0 + 0.5 jitter
+
+        # Case 2: Failed with other error, should use fallback
+        mock_retry_state.outcome.exception.return_value = ValueError("Other")
+        wait_time = strategy(mock_retry_state)
+        assert wait_time == 1.0
+        mock_fallback.assert_called_once()
 
 
 # Tests for GitHubClient
