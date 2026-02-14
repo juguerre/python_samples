@@ -120,8 +120,6 @@ def test_invalid_expressions():
         parse_task_expression("")
 
 
-
-
 def test_whitespace_handling():
     """Test that whitespace is handled correctly."""
     expression = "  task1  >>  [  task2  ,  task3  ]  >>  task4  "

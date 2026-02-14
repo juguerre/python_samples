@@ -1,8 +1,10 @@
 import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 import pytest
+from icecream import ic
 
 from samples.dag_runner import (
     CallBackPublisher,
@@ -55,6 +57,7 @@ def sample_scheduled_dag_factory() -> Callable[[dict[str, Any]], TaskDAG]:
         dag.add_dependency("task4", ["task1"])
 
         return dag
+
     return factory
 
 
@@ -65,4 +68,4 @@ def test_scheduling_performance(sample_scheduled_dag_factory: Callable[[dict[str
     start_time = time.perf_counter()
     executor.execute(exec_context=exec_context)
     end_time = time.perf_counter()
-    print(f"Execution time: {end_time - start_time} seconds")
+    ic(f"Execution time: {end_time - start_time} seconds")

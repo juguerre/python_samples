@@ -1,8 +1,9 @@
 """Tests for string_templating module."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from jinja2.exceptions import UndefinedError
 
 from src.samples.string_templating import (
     datap,
@@ -51,9 +52,7 @@ class TestDateFunctions:
             ("2023-01-15", "years", 2, "2025-01-15T00:00:00"),
         ],
     )
-    def test_date_delta(
-        self, date_str: str, element: str, rel: int, expected: str
-    ) -> None:
+    def test_date_delta(self, date_str: str, element: str, rel: int, expected: str) -> None:
         """Test date_delta function with different time deltas."""
         assert date_delta(date_str, element, rel) == expected
 
@@ -61,12 +60,10 @@ class TestDateFunctions:
         """Test timezone conversion."""
         # Test with naive datetime
         result = tpl_timezone("2023-01-15T12:00:00", "Europe/Madrid")
-        assert (
-            "2023-01-15T12:00:00+01:00" in result
-        )  # +01:00 or +02:00 depending on DST
+        assert "2023-01-15T12:00:00+01:00" in result  # +01:00 or +02:00 depending on DST
 
         # Test with timezone-aware datetime
-        dt = datetime(2023, 1, 15, 12, 0, tzinfo=timezone.utc)
+        dt = datetime(2023, 1, 15, 12, 0, tzinfo=UTC)
         result = tpl_timezone(dt.isoformat(), "Europe/Madrid")
         assert "2023-01-15T13:00:00+01:00" in result
 
@@ -138,7 +135,7 @@ class TestTemplateProcessing:
 
     def test_undefined_variable_raises_error(self) -> None:
         """Test that undefined variables raise an error."""
-        with pytest.raises(Exception):  # Should raise UndefinedError from Jinja2
+        with pytest.raises(UndefinedError):  # Should raise UndefinedError from Jinja2
             process_jinja2_template("{{ undefined_var }}", {})
 
     def test_complex_date_manipulation(self) -> None:

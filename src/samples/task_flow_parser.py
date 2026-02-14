@@ -8,9 +8,7 @@ logger = loguru.logger
 
 
 # noinspection PyPep8Naming
-def parse_task_expression(
-    expression: str, task_index: dict[str, Any] | None = None
-) -> nx.DiGraph:
+def parse_task_expression(expression: str, task_index: dict[str, Any] | None = None) -> nx.DiGraph:
     """
     Parse a task dependency expression and return a NetworkX directed graph.
 
@@ -29,7 +27,7 @@ def parse_task_expression(
     """
     # noinspection PyPep8Naming
     task_index = task_index or {}
-    G = nx.DiGraph()
+    G = nx.DiGraph()  # noqa: N806
 
     # Split by '>>' to get all stages
     stages = [stage.strip() for stage in expression.split(">>")]
@@ -45,17 +43,17 @@ def parse_task_expression(
             task_groups.append(tasks)
 
     # Add all tasks as nodes
-    G = _add_tasks_to_graph(G, task_groups, task_index)
+    G = _add_tasks_to_graph(G, task_groups, task_index)  # noqa: N806
 
     # Create edges between consecutive stages
     # Each task in stage N connects to each task in stage N+1
-    G = _add_edgest_to_graph(G, task_groups)
+    G = _add_edgest_to_graph(G, task_groups)  # noqa: N806
 
     return G
 
 
 # noinspection PyPep8Naming
-def _add_edgest_to_graph(G: DiGraph, task_groups: list[Any]) -> DiGraph:
+def _add_edgest_to_graph(G: DiGraph, task_groups: list[Any]) -> DiGraph:  # noqa: N803
     gx = G.copy()
     for i in range(len(task_groups) - 1):
         current_group = task_groups[i]
@@ -68,9 +66,7 @@ def _add_edgest_to_graph(G: DiGraph, task_groups: list[Any]) -> DiGraph:
 
 
 # noinspection PyPep8Naming
-def _add_tasks_to_graph(
-    G: DiGraph, task_groups: list[Any], task_index: dict[str, Any]
-) -> DiGraph:
+def _add_tasks_to_graph(G: DiGraph, task_groups: list[Any], task_index: dict[str, Any]) -> DiGraph:  # noqa: N803
     gx = G.copy()
     for group in task_groups:
         for task in group:

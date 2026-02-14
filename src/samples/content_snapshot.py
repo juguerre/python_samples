@@ -1,9 +1,8 @@
 import tempfile
 import time
+from collections.abc import Buffer
 from pathlib import Path
 from typing import ClassVar
-
-from typing_extensions import Buffer
 
 
 class ContentSnapshotStore:
@@ -28,19 +27,17 @@ class ContentSnapshotStore:
         self._snapshots: dict[str, list[Path]] = {}
         self._temporary = temporary
 
-    def __del__(self):
+    def __del__(self) -> None:
         if not self._temporary:
             return
         try:
-            for content_id, snapshots in self._snapshots.items():
+            for snapshots in self._snapshots.values():
                 for snapshot in snapshots:
                     snapshot.unlink()
         except AttributeError:
             pass
 
-    def load_snapshot(
-        self, content_id: str, timestamp: str | None = None
-    ) -> str | None:
+    def load_snapshot(self, content_id: str, timestamp: str | None = None) -> str | None:
         """Load a content snapshot from the store.
 
         :param content_id: The content ID.
@@ -99,10 +96,6 @@ class ContentSnapshotStore:
         else:
             content_path.write_bytes(content)
 
-    def _generate_content_path(
-        self, content_id: str, file_ext: str, timestamp: str | None
-    ) -> Path:
-        content_path = (
-            self._base_path / content_id / f"{content_id}-{timestamp}.{file_ext}"
-        )
+    def _generate_content_path(self, content_id: str, file_ext: str, timestamp: str | None) -> Path:
+        content_path = self._base_path / content_id / f"{content_id}-{timestamp}.{file_ext}"
         return content_path

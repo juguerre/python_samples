@@ -24,23 +24,31 @@ build-backend = "uv_build"
 module-root = ""
 
 [dependency-groups]
-dev = [
-    "prek>=0.3.2",
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-]
+dev = ["prek>=0.3.2", "pytest>=8.4.2", "pytest-cov>=7.0.0"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20", "SIM", "ANN", "PERF"]
-ignore = ["ANN002", "ANN003", "ANN401"]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "A",
+    "C4",
+    "T20",
+    "SIM",
+    "ANN",
+    "PERF",
+]
+ignore = ["ANN002", "ANN003", "ANN401", "ANN201", "ANN202"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
-
-

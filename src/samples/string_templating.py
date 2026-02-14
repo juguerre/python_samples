@@ -1,4 +1,5 @@
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from dateutil.parser import parse
@@ -49,9 +50,7 @@ def datap(s: str) -> str:
 
 
 @curry
-def date_delta(
-    s: str, element: Literal["years", "months", "weeks", "days"], rel: int
-) -> str:
+def date_delta(s: str, element: Literal["years", "months", "weeks", "days"], rel: int) -> str:
     """Transforms a string datetime moving a relative number `rel` of `elements`
 
     :param s: string datetime
@@ -74,10 +73,7 @@ def tpl_timezone(s: str, tz: str) -> str:
     :return: string datetime in the given timezone
     """
     d = parse(s)
-    if not d.tzinfo:  # naive
-        d = d.replace(tzinfo=ZoneInfo(tz))
-    else:
-        d = d.astimezone(ZoneInfo(tz))
+    d = d.replace(tzinfo=ZoneInfo(tz)) if not d.tzinfo else d.astimezone(ZoneInfo(tz))
     return d.isoformat()
 
 
@@ -150,8 +146,8 @@ def process_jinja2_template(template: str, context: dict[str, Any]) -> str:
 
     >>> process_jinja2_template("Hello {{ name }}!", {"name": "World"})
     'Hello World!'
-    >>> process_jinja2_template("Today is {{ today | date }}", {"today": datetime.date(2023, 1, 1)})
-    'Today is 2023-01-01'
+    >>> process_jinja2_template("Today is {{ today | year }}", {"today": datetime.date(2023, 1, 1)})
+    'Today is 2023'
 
     :param template: Jinja2 template
     :param context: context for the template

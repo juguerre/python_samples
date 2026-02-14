@@ -1,9 +1,10 @@
 import asyncio
 import os
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
 from io import StringIO
-from typing import Any, Callable, ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 import httpx
 import loguru
@@ -83,6 +84,7 @@ def log_request(func: Callable[..., Any]) -> Callable[..., Any]:
 
 class HttpClientError(Exception):
     """Base exception for HttpClient"""
+
     pass
 
 
@@ -137,9 +139,7 @@ class wait_for_rate_limit(wait_base):
 class HttpValidationError(HttpClientError):
     """Exception for validation errors"""
 
-    def __init__(
-        self, message: str, validation_error: ValidationError, data: Any
-    ) -> None:
+    def __init__(self, message: str, validation_error: ValidationError, data: Any) -> None:
         """Initialize the validation error.
 
         :param message: The error message.
@@ -207,7 +207,7 @@ class BaseHttpClient:
             # Retry on 5xx (Server Errors) or 429 (Too Many Requests)
             return exception.status_code >= 500 or exception.status_code == 429
         # Retry on httpx connection/timeout errors
-        return isinstance(exception, (httpx.RequestError, httpx.HTTPStatusError))
+        return isinstance(exception, httpx.RequestError | httpx.HTTPStatusError)
 
     RETRY_CONFIG: ClassVar[dict[str, Any]] = {
         "stop": stop_after_attempt(5),
@@ -310,9 +310,7 @@ class BaseHttpClient:
 
     @retry(**RETRY_CONFIG)
     @log_request
-    def _get(
-        self, *, url: str, model_class: type[T], params: dict[str, Any] | None = None
-    ) -> T:
+    def _get(self, *, url: str, model_class: type[T], params: dict[str, Any] | None = None) -> T:
         response = self.client.get(url, params=params)
         self._handle_response_error(response)
         return self._validate_response(model_class, response.json(), url)
@@ -335,9 +333,7 @@ class BaseHttpClient:
 
     @retry(**RETRY_CONFIG)
     @log_request
-    async def _post_async(
-        self, *, url: str, data: dict[str, Any], model_class: type[T]
-    ) -> T:
+    async def _post_async(self, *, url: str, data: dict[str, Any], model_class: type[T]) -> T:
         response = await self.client_async.post(url, json=data)
         self._handle_response_error(response)
         return self._validate_response(model_class, response.json(), url)
@@ -463,9 +459,7 @@ class BaseHttpClient:
             return model_class.model_validate(data)
         except ValidationError as ve:
             idx_msg = f" (at index {index})" if index is not None else ""
-            error_msg = (
-                f"Validation failed for {model_class.__name__} from {url}{idx_msg}"
-            )
+            error_msg = f"Validation failed for {model_class.__name__} from {url}{idx_msg}"
             logger.error(f"{error_msg}. Data: {data}")
             raise HttpValidationError(error_msg, ve, data) from ve
 
@@ -557,9 +551,7 @@ class GitHubClient(BaseHttpClient):
         :return: A list of GitHubRepo models.
         """
         # noinspection PyArgumentList
-        return await self._get_list_async(
-            url=f"/users/{username}/repos", model_class=GitHubRepo
-        )
+        return await self._get_list_async(url=f"/users/{username}/repos", model_class=GitHubRepo)
 
 
 if __name__ == "__main__":

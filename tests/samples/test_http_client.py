@@ -1,7 +1,7 @@
 """Tests for the http_client module."""
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -75,7 +75,7 @@ def test_github_user_creation(mock_github_user_data: dict[str, Any]) -> None:
     assert user.id == 12345678
     assert user.name == "Test User"
     assert user.public_repos == 42
-    assert user.created_at == datetime(2011, 1, 25, 18, 44, 36, tzinfo=timezone.utc)
+    assert user.created_at == datetime(2011, 1, 25, 18, 44, 36, tzinfo=UTC)
 
 
 def test_github_user_optional_fields() -> None:
@@ -292,9 +292,7 @@ class TestGitHubClient:
         assert repos[0].name == "repo1"
 
     @pytest.mark.anyio
-    async def test_async_get_user_success(
-        self, mock_github_user_data: dict[str, Any]
-    ) -> None:
+    async def test_async_get_user_success(self, mock_github_user_data: dict[str, Any]) -> None:
         """Test successful async get_user call."""
         client = GitHubClient(token="test_token")
         client._client_async = MagicMock(spec=httpx.AsyncClient)

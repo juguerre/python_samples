@@ -1,7 +1,9 @@
 """Additional tests to improve coverage for the DAG runner module."""
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -59,9 +61,7 @@ class TestFunctionTaskErrors:
     def test_execute_without_date_context(self):
         """Test execution without date in context (line 151)."""
         task = FunctionTask(task_id="test_task", _cached_func=lambda: 1)
-        with pytest.raises(
-            ValueError, match="Execution context must contain a 'date' field"
-        ):
+        with pytest.raises(ValueError, match="Execution context must contain a 'date' field"):
             task.execute({})
 
     def test_execute_task_skipped_not_scheduled(self):
@@ -90,7 +90,7 @@ class TestTaskDAGErrors:
         class CustomTask(BaseTaskModel):
             """Custom task type not handled in save."""
 
-            def execute(self, exec_context):
+            def execute(self, exec_context: dict[str, Any]) -> Any:
                 return "custom"
 
         dag = TaskDAG()
@@ -100,7 +100,7 @@ class TestTaskDAGErrors:
         with pytest.raises(ValueError, match="Task type CustomTask not supported"):
             dag.save_dag()
 
-    def test_load_dag_no_filepath(self, tmp_path):
+    def test_load_dag_no_filepath(self, tmp_path: Path):
         """Test loading DAG without filepath (line 233)."""
         # Test the error when _filepath attribute doesn't exist
         # Note: This test might not cover line 233 due to implementation details
@@ -140,7 +140,7 @@ class TestTaskDAGErrors:
         with pytest.raises(ValueError, match="Task with ID 'task2' not found"):
             dag.add_dependency("task2", ["task1"])
 
-    def test_add_dependency_dependency_not_found(self, simple_task_func):
+    def test_add_dependency_dependency_not_found(self, simple_task_func: Callable):
         """Test adding dependency with non-existent dependency (line 292)."""
         dag = TaskDAG()
         task1 = FunctionTask(task_id="task1", _cached_func=simple_task_func)
@@ -188,7 +188,7 @@ class TestTaskDAGErrors:
         dag = TaskDAG()
 
         # Add a plain function (not a Task instance)
-        def my_func(x, **_kwargs):
+        def my_func(x: int, **_kwargs) -> int:
             return x * 2
 
         # Note: When adding via add_task, the tags go into FunctionTask constructor

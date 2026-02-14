@@ -6,6 +6,7 @@
 from typing import Any, Protocol
 
 
+# noinspection PyUnresolvedReferences
 class FluentPipeProtocol(Protocol):
     """Auto-generated Protocol for IDE support of FluentPipe steps."""
 
@@ -14,8 +15,7 @@ class FluentPipeProtocol(Protocol):
 
         This is a demonstration function for the fluent pipeline.
         It creates a new list by repeating the original list 'mul' times.
-
-        :param data: The input list to be processed.
+        `data` value is implicit in pipeline call
         :param mul: The multiplier for list repetition.
 
         :return: The multiplied list.
@@ -30,8 +30,7 @@ class FluentPipeProtocol(Protocol):
 
         This function simply returns the input data unchanged.
         It's useful for testing pipeline structure and flow.
-
-        :param data: The input data to pass through unchanged.
+        `data` value is implicit in pipeline call
 
         :return: The same data that was passed in.
 
@@ -45,8 +44,7 @@ class FluentPipeProtocol(Protocol):
 
         This function iterates through a list of dictionaries and adds the
         provided value to all string values in each dictionary using toolz.valmap.
-
-        :param data: List of dictionaries to process.
+        `data` value is implicit in pipeline call
         :param value: The string value to append to all string values.
 
         :return: A new list of dictionaries with modified string values.

@@ -3,11 +3,14 @@
 import math
 import random
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Callable, Literal
+from pathlib import Path
+from typing import Any, Literal
 
 import pytest
+from icecream import ic
 
 from samples.dag_runner import (
     FunctionTask,
@@ -24,9 +27,7 @@ def func(_task_id: str) -> int:
 
 
 def get_next_weekday(
-    weekday: Literal[
-        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-    ],
+    weekday: Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
 ) -> datetime:
     """
     Get the next occurrence of the specified weekday.
@@ -53,9 +54,7 @@ def get_next_weekday(
     # If today is the target day and it's not past midnight yet, stay on today
     if days_ahead == 0 and datetime.now().time() < datetime.min.time():
         days_ahead = 0
-    elif (
-        days_ahead == 0
-    ):  # If today is the target day but past midnight, go to next week
+    elif days_ahead == 0:  # If today is the target day but past midnight, go to next week
         days_ahead = 7
 
     next_date = datetime.now() + timedelta(days=days_ahead)
@@ -127,7 +126,7 @@ def test_detect_cycle():
 def test_task_execution():
     """Test executing a simple task."""
 
-    def funct(x, **_kwargs):
+    def funct(x: int, **_kwargs: Any) -> int:
         return x * 2
 
     task = FunctionTask(
@@ -199,7 +198,7 @@ def test_task_dag_executor(simple_task_func: Callable):
     assert dag.get_task("task2").status == TaskStatus.DONE
 
 
-def test_save_and_load_dag(tmp_path):
+def test_save_and_load_dag(tmp_path: Path):
     """Test saving and loading a DAG to/from a file."""
     # Create and save a DAG
 
@@ -351,7 +350,7 @@ def sample_scheduled_dag(
     return dag
 
 
-def test_dag_execution_order(sample_dag):
+def test_dag_execution_order(sample_dag: TaskDAG):
     """Test that tasks are executed in the correct order."""
     # Execute DAG
     executor = TaskDAGExecutor(sample_dag, max_workers=1)
@@ -363,21 +362,19 @@ def test_dag_execution_order(sample_dag):
     assert list(result.keys()).index("task2") < list(result.keys()).index("task3")
 
 
-def test_dag_execution_order_with_test_tag(sample_dag):
+def test_dag_execution_order_with_test_tag(sample_dag: TaskDAG):
     """Test that tasks are executed in the correct order."""
     # Execute DAG
     executor = TaskDAGExecutor(sample_dag, max_workers=1)
     # result is an OrderectDict and maintains the order of execution
-    result = executor.execute(
-        exec_context={"date": datetime.now().isoformat()}, tags=["test"]
-    )
+    result = executor.execute(exec_context={"date": datetime.now().isoformat()}, tags=["test"])
 
     # Verify task3 is not executed (taged with "prod" instead of test)
 
     assert len(result) == 2
 
 
-def test_dag_save_and_load(sample_dag):
+def test_dag_save_and_load(sample_dag: TaskDAG):
     """Test saving and loading a DAG to/from a file."""
     # Create and save a DAG
     sample_dag.save_dag()
@@ -392,7 +389,7 @@ def test_dag_save_and_load(sample_dag):
     assert loaded_dag.get_task("task3").task_id == "task3"
 
 
-def test_scheduling_periodicity(sample_scheduled_dag):
+def test_scheduling_periodicity(sample_scheduled_dag: TaskDAG):
     assert (
         sample_scheduled_dag.get_task("task1").scheduling.is_active_day(
             datetime.now().replace(day=1)
@@ -412,9 +409,7 @@ def test_scheduling_periodicity(sample_scheduled_dag):
         is True
     )
     assert (
-        sample_scheduled_dag.get_task("task2").scheduling.is_active_day(
-            get_next_weekday("monday")
-        )
+        sample_scheduled_dag.get_task("task2").scheduling.is_active_day(get_next_weekday("monday"))
         is False
     )
 
@@ -425,10 +420,10 @@ def test_scheduling_periodicity(sample_scheduled_dag):
 @pytest.mark.skip
 def test_scheduling_performance(
     sample_dag_factory: Callable[[int, int, float], TaskDAG],
-):
+) -> None:
     dag = sample_dag_factory(100, 5, 0.1)
     executor = TaskDAGExecutor(dag, max_workers=16)
     start_time = time.perf_counter()
     executor.execute(exec_context={"date": datetime.now().isoformat()})
     end_time = time.perf_counter()
-    print(f"Execution time: {end_time - start_time} seconds")
+    ic(f"Execution time: {end_time - start_time} seconds")

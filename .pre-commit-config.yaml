@@ -3,13 +3,13 @@ repos:
     hooks:
       - id: generate-stubs
         name: Generate FluentPipe protocol stubs
-        entry: ./scripts/run-hook.sh uv run scripts/gen_stubs.py src/samples/fluent_pipeline.py src/samples/protocol_stubs.py
+        entry: ./scripts/run-hook.sh uv run scripts/gen_stubs.py  --source src/samples/fluent_pipeline.py --output src/samples/protocol_stubs.py
         language: system
         files: ^src/samples/fluent_pipeline\.py$
         pass_filenames: false
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.9
+    rev: v0.15.1
     hooks:
       - id: ruff
         args: [--fix]

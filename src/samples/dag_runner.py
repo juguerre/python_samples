@@ -16,23 +16,19 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from collections.abc import Callable, Generator, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from enum import StrEnum
 from threading import Event
 from typing import (
     Any,
-    Callable,
     ClassVar,
-    Dict,
-    Generator,
     Generic,
-    Iterable,
-    List,
     Literal,
+    Protocol,
     Self,
     TypeVar,
-    Union,
     runtime_checkable,
 )
 
@@ -41,16 +37,15 @@ import toolz
 from loguru import logger
 from networkx import DiGraph
 from networkx.readwrite import json_graph
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, Field, field_validator
 from toolz import curry
-from typing_extensions import Protocol
 
 from samples.content_snapshot import ContentSnapshotStore
 
 T = TypeVar("T")
 
 
-class TaskSkipped(Exception):
+class TaskSkipped(Exception):  # noqa: N818
     pass
 
 
@@ -142,17 +137,13 @@ class SampleBackendCallableClient:
 
     def __init__(self, exec_context: dict[str, Any]) -> None:
         self._exec_context = exec_context
-        self._callback_publisher: CallBackPublisher = exec_context.get(
-            "callback_publisher"
-        )
+        self._callback_publisher: CallBackPublisher = exec_context.get("callback_publisher")
         if not self._callback_publisher:
             raise ValueError("Callback publisher not found in execution context")
 
     def __call__(self, *args: Any, task_id: str, **kwargs: Any) -> Any:
         try:
-            callback_event: CallBackEvent = self._callback_publisher.register_callback(
-                task_id
-            )
+            callback_event: CallBackEvent = self._callback_publisher.register_callback(task_id)
             # run a thread that publish the callback event
             thread = threading.Thread(target=self.publish_callback, args=(task_id,))
             thread.start()
@@ -172,6 +163,7 @@ class SampleBackendCallableClient:
 
 class FunctionTask(BaseTaskModel, Generic[T]):
     """A task that wraps a callable function."""
+
     retries: int = Field(default=0, ge=0)
     model_type: Literal["function_task"] = "function_task"
     func_name: str | None = None
@@ -179,7 +171,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = {}
 
-    def __init__(self, **data):
+    def __init__(self, **data: Any) -> None:
         # Extract private attributes before calling super().__init__
         cached_func = data.pop("_cached_func", None)
 
@@ -201,9 +193,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
                 self.func_name = ":".join([module, name])
 
         elif cached_func is not None and self.func_name is not None:
-            raise ValueError(
-                "Function name and cached function cannot be both provided"
-            )
+            raise ValueError("Function name and cached function cannot be both provided")
         elif self.func_name is None and self._cached_func is None:
             raise ValueError("Function name or cached function must be provided")
 
@@ -213,9 +203,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
             module_name, func_name = self.func_name.rsplit(":", 1)
             module = importlib.import_module(module_name)
             self._cached_func = getattr(module, func_name)
-        elif (
-            not self._cached_func and self.func_name and "." in self.func_name
-        ):  # callable class
+        elif not self._cached_func and self.func_name and "." in self.func_name:  # callable class
             module_name, class_name = self.func_name.rsplit(".", 1)
             module = importlib.import_module(module_name)
             func = getattr(module, class_name)()
@@ -224,7 +212,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
 
     @field_validator("func_name", mode="after")
     @classmethod
-    def validate_func_name(cls, v):
+    def validate_func_name(cls, v: str) -> str:
         if "." not in v and ":" not in v:
             raise ValueError(
                 "Function name must be in the format 'module:function' or 'module.class'"
@@ -233,12 +221,10 @@ class FunctionTask(BaseTaskModel, Generic[T]):
         module_name, func_name = v.rsplit(":", 1)
         try:
             module = importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            raise ValueError(f"Module '{module_name}' not found")
+        except ModuleNotFoundError as e:
+            raise ValueError(f"Module '{module_name}' not found") from e
         if not hasattr(module, func_name):
-            raise ValueError(
-                f"Function '{func_name}' not found in module '{module_name}'"
-            )
+            raise ValueError(f"Function '{func_name}' not found in module '{module_name}'")
 
         return v
 
@@ -249,9 +235,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
                 raise ValueError("Execution context must contain a 'date' field")
             kwargs = self.kwargs or {}
             self.status = TaskStatus.RUNNING
-            if not self.scheduling.is_active_day(
-                datetime.fromisoformat(exec_context["date"])
-            ):
+            if not self.scheduling.is_active_day(datetime.fromisoformat(exec_context["date"])):
                 logger.info(f"Task '{self.task_id}' is not scheduled for today")
                 raise TaskSkipped(self.task_id)
 
@@ -319,12 +303,10 @@ class CallBackPublisher:
 
 
 class TaskDAG:
-    def __init__(self, store_filepath: str = None, init_graph: DiGraph = None):
+    def __init__(self, store_filepath: str = None, init_graph: DiGraph = None) -> None:
         self._store_filepath = store_filepath
         self._graph = init_graph or nx.DiGraph()
-        self._snapshot_store = ContentSnapshotStore(
-            base_path=store_filepath, temporary=True
-        )
+        self._snapshot_store = ContentSnapshotStore(base_path=store_filepath, temporary=True)
 
     @property
     def graph(self) -> DiGraph:
@@ -346,10 +328,7 @@ class TaskDAG:
         return self._graph.nodes[task_id].get("task")
 
     def tasks(self) -> Iterable[tuple[str, Task]]:
-        return [
-            (task_id, node.get("task"))
-            for task_id, node in self._graph.nodes(data=True)
-        ]
+        return [(task_id, node.get("task")) for task_id, node in self._graph.nodes(data=True)]
 
     def save_dag(self) -> None:
         # Create a copy of the graph to avoid modifying the original
@@ -379,7 +358,7 @@ class TaskDAG:
 
     @classmethod
     def load_dag_from_file(cls, filepath: str) -> Self:
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             data = json.load(f)
         return cls._get_dag_from_json(data)
 
@@ -389,9 +368,7 @@ class TaskDAG:
         return self._get_dag_from_json(data, self._store_filepath)
 
     @classmethod
-    def _get_dag_from_json(
-        cls, data: dict[str, Any], store_filepath: str = None
-    ) -> TaskDAG:
+    def _get_dag_from_json(cls, data: dict[str, Any], store_filepath: str = None) -> TaskDAG:
         # Reconstruct the graph
         graph = json_graph.node_link_graph(data, edges="edges")
 
@@ -413,19 +390,19 @@ class TaskDAG:
 
         return dag
 
-    def reset_status(self, tags: list[str] = None):
-        for node_id, task in self.tasks():
+    def reset_status(self, tags: list[str] = None) -> None:
+        for _node_id, task in self.tasks():
             if tags and self.any_tag_in_tags(*task.tags, tags=tags):
                 task.status = TaskStatus.PENDING
 
     @staticmethod
     def any_tag_in_tags(*args: str, tags: list[str]) -> bool:
-        return any([t in tags for t in args])
+        return any(arg in tags for arg in args)
 
     def add_task(
         self,
         task_id: str,
-        task: Union[Task[T], Callable[..., T]],
+        task: Task[T] | Callable[..., T],
         tags: list[str] = None,
         *args: Any,
         **kwargs: Any,
@@ -442,7 +419,7 @@ class TaskDAG:
 
         self._graph.add_node(task_id, task=task)
 
-    def add_dependency(self, task_id: str, depends_on: List[str]) -> None:
+    def add_dependency(self, task_id: str, depends_on: list[str]) -> None:
         if task_id not in self.graph.nodes():
             raise ValueError(f"Task with ID '{task_id}' not found")
 
@@ -462,7 +439,7 @@ class TaskDAG:
         return nx.is_directed_acyclic_graph(working_graph)
 
     @staticmethod
-    def are_ancestors_done(node_id: str, graph: DiGraph):
+    def are_ancestors_done(node_id: str, graph: DiGraph) -> bool:
         """Check if all ancestors of a node are done.
 
         :param node_id: The ID of the node to check.
@@ -476,7 +453,7 @@ class TaskDAG:
         return True
 
     @staticmethod
-    def pending_ancestors(node_id: str, graph: DiGraph):
+    def pending_ancestors(node_id: str, graph: DiGraph) -> list[str]:
         return [
             asc_id
             for asc_id in nx.ancestors(graph, node_id)
@@ -501,14 +478,13 @@ class TaskDAGFilter:
             task = working_dag.get_task(desc_id)
             if task.scheduling.is_active_day(date):
                 logger.warning(
-                    f"{node_id}: removing active descendant {desc_id} from "
-                    f"inactive node {node_id}"
+                    f"{node_id}: removing active descendant {desc_id} from inactive node {node_id}"
                 )
 
     @staticmethod
     def warn_for_with_tag_descendant(
         working_dag: TaskDAG, node_id: str, descent: Iterable, tags: list[str]
-    ):
+    ) -> None:
         for desc_id in descent:
             task = working_dag.get_task(desc_id)
             if TaskDAG.any_tag_in_tags(*task.tags, tags=tags):
@@ -561,9 +537,7 @@ class TaskDAGFilter:
         for node_id in non_tag_nodes:
             nodes_to_remove.append(node_id)
             descent = nx.descendants(working_dag.graph, node_id)
-            TaskDAGFilter.warn_for_with_tag_descendant(
-                working_dag, node_id, descent, tags
-            )
+            TaskDAGFilter.warn_for_with_tag_descendant(working_dag, node_id, descent, tags)
             nodes_to_remove.extend(descent)
 
         res_graph.remove_nodes_from(nodes_to_remove)
@@ -582,15 +556,13 @@ class TaskDAGExecutor:
     def __init__(self, dag: TaskDAG, max_workers: int) -> None:
         """Initialize a new DAGRunner with an empty graph."""
         self._dag = dag
-        self.results: Dict[str, Any] = OrderedDict()
+        self.results: dict[str, Any] = OrderedDict()
         self.max_workers = max_workers
         self._pool_workers_semaphore = threading.Semaphore(max_workers)
         self._result_event = threading.Event()
         self._lock = threading.Lock()
 
-    def wait_for_tasks_results(
-        self, node_id: str, graph: DiGraph, timeout: float = None
-    ) -> Any:
+    def wait_for_tasks_results(self, node_id: str, graph: DiGraph, timeout: float = None) -> Any:
         """Wait for a task to complete and return its result.
 
         :param node_id: The ID of the node that is waiting for the tasks
@@ -613,9 +585,7 @@ class TaskDAGExecutor:
                 logger.debug(f"{node_id}: Wait end: All tasks done: {task_id_lst}")
                 return
             # check if all tasks are done
-            logger.debug(
-                f"{node_id}: Tasks pending: {TaskDAG.pending_ancestors(node_id, graph)}"
-            )
+            logger.debug(f"{node_id}: Tasks pending: {TaskDAG.pending_ancestors(node_id, graph)}")
 
     # noinspection D
     def get_secure_node_generator(
@@ -629,9 +599,7 @@ class TaskDAGExecutor:
         there is no limit.
         :return: A generator that yields nodes in topological order.
         """
-        gen_dict = {
-            g: gen for g, gen in enumerate(list(nx.topological_generations(graph)))
-        }
+        gen_dict = dict(enumerate(list(nx.topological_generations(graph))))
         moved_set = set()
         retries = 0
         for g, gen in gen_dict.items():
@@ -644,9 +612,7 @@ class TaskDAGExecutor:
                 while i < len(gen):
                     node = gen[i]
                     if TaskDAG.are_ancestors_done(node, graph):
-                        logger.debug(
-                            f"Yielding node {node} (gen {g}, position {i + 1}/{len(gen)})"
-                        )
+                        logger.debug(f"Yielding node {node} (gen {g}, position {i + 1}/{len(gen)})")
                         yield node
                         retries = 0
                         i += 1
@@ -675,9 +641,7 @@ class TaskDAGExecutor:
                         # * process same i index again
 
     @curry
-    def done_callback(
-        self, future: Future, task_id: str, exec_context: dict[str, Any]
-    ) -> None:
+    def done_callback(self, future: Future, task_id: str, exec_context: dict[str, Any]) -> None:
         task = self._dag.get_task(task_id)
         try:
             self.results[task_id] = future.result()
@@ -698,9 +662,7 @@ class TaskDAGExecutor:
                 # release semaphore to allow pool to submit more tasks
                 self._pool_workers_semaphore.release()
 
-    def execute(
-        self, exec_context: dict[str, Any], tags: list[str] = None
-    ) -> Dict[str, Any]:
+    def execute(self, exec_context: dict[str, Any], tags: list[str] = None) -> dict[str, Any]:
         if not self._dag.validate():
             raise ValueError("The graph contains cycles and is not a valid DAG")
 
@@ -709,9 +671,7 @@ class TaskDAGExecutor:
         )
         working_dag = dag_filter.filter()
 
-        logger.info(
-            f"Final working graph node size: {working_dag.graph.number_of_nodes()}"
-        )
+        logger.info(f"Final working graph node size: {working_dag.graph.number_of_nodes()}")
 
         # Execute tasks in topological order using a thread pool to parallelize excution
         # in multiple threads and using graph generations to execute tasks in parallel.
@@ -737,9 +697,7 @@ class TaskDAGExecutor:
                 # with no semaphore, all tasks are submitted to the executor immediately
                 self._pool_workers_semaphore.acquire()
                 task.status = TaskStatus.SUBMITTED
-                executor.submit(
-                    task.execute, exec_context=exec_context
-                ).add_done_callback(
+                executor.submit(task.execute, exec_context=exec_context).add_done_callback(
                     self.done_callback(task_id=task.task_id, exec_context=exec_context)
                 )
                 # log current number of active workers

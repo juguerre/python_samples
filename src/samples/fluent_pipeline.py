@@ -50,7 +50,7 @@ fluent interface for building data processing pipelines.
 import inspect
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 import toolz
 from icecream import ic
@@ -63,7 +63,7 @@ P = TypeVar("P")
 
 
 # noinspection PyProtectedMember
-class PipeStep(Generic[P]):
+class PipeStep[P]:
     """Intermediate object that enforces function calls in the pipeline.
 
     This class acts as a bridge between :class:`FluentPipe` and individual
@@ -115,12 +115,10 @@ class PipeStep(Generic[P]):
         :raises AttributeError: If the previous function wasn't called properly
             or if the attribute doesn't exist.
         """
-        if self.pipe._funcs:
-            raise AttributeError(f"'{self.pipe._funcs[-1].__name__}' was not correctly called!")
-        raise AttributeError(f"Attribute '{name}' not found")
+        raise AttributeError(f"'{self.func.__name__}' was not correctly called!")
 
 
-class FluentPipe(Generic[P]):
+class FluentPipe[P]:
     """A fluent data pipeline for composing curried functions.
 
     This class provides a clean, chainable interface for building data
@@ -240,7 +238,7 @@ class FluentPipe(Generic[P]):
         return toolz.pipe(self._data, *c_funcs)
 
 
-class PipelineRegistry(Generic[P]):
+class PipelineRegistry[P]:
     """A registry for managing and providing access to pipeable functions.
 
     This class encapsulates the function mapping and provides the
@@ -253,16 +251,14 @@ class PipelineRegistry(Generic[P]):
     :ivar _borg_state: Shared state across all instances of this class.
     """
 
-    _borg_state: dict[str, Any]
+    _borg_state: dict[str, Any] = {}
 
     def __init__(self) -> None:
         """Initialize or retrieve the shared borg state."""
         # This allows the class to be used as a borg pattern
-        if not hasattr(self, "_borg_state"):
+        self.__dict__ = self._borg_state
+        if "_funcs" not in self.__dict__:
             self._funcs: dict[str, Callable] = {}
-            self._borg_state = self.__dict__
-        else:
-            self.__dict__ = self._borg_state
 
     def pipeable(self, func: Callable) -> Callable:
         """Decorator to register a function in this registry instance.
@@ -385,6 +381,7 @@ def fluent_pipe() -> None:
 
     res2 = pipe.sample_add_to_values(value="_Hu!").sample_filter1(mul=2).sample_filter2().execute()
 
+    # test update
     ic(res1)
     ic(res2)
 
