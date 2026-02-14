@@ -6,11 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
+    "icecream>=2.1.10",
     "jinja2>=3.1.6",
     "loguru>=0.7.3",
     "networkx>=3.0",
     "pydantic>=2.12.3",
-    "pytest-cov>=7.0.0",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.1",
     "tenacity>=9.1.2",
@@ -25,7 +25,22 @@ module-root = ""
 
 [dependency-groups]
 dev = [
+    "prek>=0.3.2",
     "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20", "SIM", "ANN", "PERF"]
+ignore = ["ANN002", "ANN003"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
 
 
