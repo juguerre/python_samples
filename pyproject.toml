@@ -52,3 +52,49 @@ ignore = ["ANN002", "ANN003", "ANN401", "ANN201", "ANN202"]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[tool.sqlfluff.core]
+dialect = "bigquery"
+max_line_length = 100
+templater = "jinja"
+sql_file_exts = ".sql,.sql.j2,.dml,.ddl,.pkb"
+
+[tool.sqlfluff.indentation]
+indented_joins = false
+indent_unit = "space"
+tab_space_size = 2
+
+
+[tool.sqlfluff.templater]
+unwrap_wrapped_queries = true
+
+[tool.sqlfluff.templater.jinja]
+apply_dbt_builtins = true
+
+# For rule specific configuration, use dots between the names exactly
+# as you would in .sqlfluff_backup. In the background, SQLFluff will unpack the
+# configuration paths accordingly.
+[tool.sqlfluff.rules.capitalisation.keywords]
+capitalisation_policy = "upper"
+
+[tool.sqlfluff.rules.capitalisation.identifiers]
+extended_capitalisation_policy = "consistent"
+
+[tool.sqlfluff.rules.capitalisation.functions]
+extended_capitalisation_policy = "upper"
+
+[tool.sqlfluff.rules.capitalisation.literals]
+capitalisation_policy = "consistent"
+
+[tool.sqlfluff.rules.capitalisation.types]
+extended_capitalisation_policy = "upper"
+
+[tool.sqlfluff.rules.layout.spacing]
+comma_space = "after"
+
+[tool.sqlfluff.rules.aliasing.table]
+aliasing = "explicit"
+
+[tool.sqlfluff.rules.convention.not_equal]
+preferred_not_equal_style = "c_style"
+
