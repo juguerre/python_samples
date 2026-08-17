@@ -47,19 +47,23 @@ fluent interface for building data processing pipelines.
 * :func:`fluent_pipe`: Demo function showing pipeline usage
 """
 
+from __future__ import annotations
+
 import inspect
 from collections.abc import Callable
-from functools import partial
-from typing import Any, TypeVar
+from types import FunctionType, MethodType
+from typing import Any, TypeVar, cast
 
 import toolz
+import toolz.curried
 from icecream import ic
 from toolz import curry
 
 from samples.protocol_stubs import FluentPipeProtocol
 
 # Type variable for the Protocol interface
-P = TypeVar("P")
+P = TypeVar("P", bound=FluentPipeProtocol)
+NamedCallable = FunctionType | MethodType
 
 
 # noinspection PyProtectedMember
@@ -78,7 +82,7 @@ class PipeStep[P]:
         wasn't properly called.
     """
 
-    def __init__(self, pipe: "FluentPipe[P]", func: Callable) -> None:
+    def __init__(self, pipe: FluentPipe[P], func: NamedCallable) -> None:
         """Initialize a PipeStep instance.
 
         :param pipe: The parent FluentPipe instance.
@@ -103,7 +107,7 @@ class PipeStep[P]:
                 f" found arg: '{args}' in func '{self.func.__name__}'"
             )
         self.pipe._add_step(self.func, kwargs)
-        return self.pipe
+        return cast(P, self.pipe)
 
     def __getattr__(self, name: str) -> Any:
         """Handle attribute access with proper error messages.
@@ -129,30 +133,24 @@ class FluentPipe[P]:
     execution, and enforces that curried functions have exactly one
     remaining parameter (the data to be processed).
 
-
-    :ivar _data: The initial data to be processed.
-    :ivar _funcs: List of functions in the pipeline.
-    :ivar _kwargs: List of keyword arguments for each function.
-    :ivar _funcs_namespace: Dictionary of available curried functions.
-
     :param data: The initial data to process through the pipeline.
     :param funcs_namespace: Dictionary mapping function names to curried functions.
     """
 
-    def __init__(self, data: Any, funcs_namespace: dict[str, Callable]) -> None:
+    def __init__(self, data: Any, funcs_namespace: dict[str, curry]) -> None:
         """Initialize a FluentPipe instance.
 
         :param data: The initial data to process through the pipeline.
         :param funcs_namespace: Dictionary mapping function names to curried functions.
         """
         self._data = data
-        self._funcs: list[Callable] = []
+        self._funcs: list[NamedCallable] = []
         self._kwargs: list[dict[str, Any]] = []
         self._funcs_namespace = funcs_namespace or {}
 
     def get_fluent_pipe(self) -> P:
         """Returns self as P protocol for type check convenience."""
-        return self
+        return cast(P, self)
 
     def __getattr__(self, name: str) -> PipeStep[P]:
         """Dynamically access pipeline functions from the namespace.
@@ -171,14 +169,14 @@ class FluentPipe[P]:
 
         func = self._funcs_namespace.get(name)
 
-        if func and callable(func):
+        if func and isinstance(func, NamedCallable):
             # self._funcs.append(func)
             # return self
             return PipeStep(self, func)
         else:
             raise AttributeError(f"'{name}' attribute not found in namespace or this class")
 
-    def _add_step(self, func: Callable, kwargs: dict[str, Any]) -> None:
+    def _add_step(self, func: NamedCallable, kwargs: dict[str, Any]) -> None:
         """Add a function step to the pipeline.
 
         :param func: The curried function to add.
@@ -188,7 +186,7 @@ class FluentPipe[P]:
         self._kwargs.append(kwargs)
 
     @staticmethod
-    def _check_curried_func(f: Callable) -> None:
+    def _check_curried_func(f: Callable | toolz.partial) -> None:
         """Validate that a curried function has exactly one remaining parameter.
 
         This ensures that the function is ready to receive the pipeline data
@@ -200,15 +198,14 @@ class FluentPipe[P]:
         :raises RuntimeError: If the function doesn't have exactly one remaining
             parameter.
         """
-        if hasattr(f, "func") and hasattr(f, "args"):
+        if isinstance(f, toolz.partial) and isinstance(f.func, NamedCallable):
             # It's a toolz.curry partial
-            f: partial
             sig = inspect.signature(f.func)
             remaining_params = len(sig.parameters) - len(f.args) - len(f.keywords)
 
             if remaining_params != 1:
                 raise RuntimeError(
-                    f"Function '{f.__name__}' should have exactly 1 remaining parameter (data), "
+                    f"Func. '{f.func.__name__}' should have exactly 1 remaining parameter (data), "
                     f"but has {remaining_params}. Provide all other parameters."
                 )
 
@@ -258,9 +255,9 @@ class PipelineRegistry[P]:
         # This allows the class to be used as a borg pattern
         self.__dict__ = self._borg_state
         if "_funcs" not in self.__dict__:
-            self._funcs: dict[str, Callable] = {}
+            self._funcs: dict[str, curry] = {}
 
-    def pipeable(self, func: Callable) -> Callable:
+    def pipeable(self, func: NamedCallable) -> Callable:
         """Decorator to register a function in this registry instance.
 
         :param func: The function to curry and register.
@@ -271,7 +268,7 @@ class PipelineRegistry[P]:
         return curried
 
     @property
-    def namespace(self) -> dict[str, Callable]:
+    def namespace(self) -> dict[str, curry]:
         """Returns a copy of the registered functions mapping.
 
         :return: Dict mapping function names to curried functions.
@@ -284,7 +281,7 @@ class PipelineRegistry[P]:
         :param data: The initial data for the pipeline.
         :return: A new FluentPipe instance cast to the Protocol P.
         """
-        return FluentPipe(data, self.namespace)
+        return cast(P, FluentPipe(data, self.namespace))
 
 
 # Create a default registry instance
@@ -374,12 +371,12 @@ def fluent_pipe() -> None:
     pipe: FluentPipeProtocol = pipe_registry.create_fluent_pipe(data)
     res1 = pipe.sample_filter1(mul=5).sample_filter2().sample_add_to_values(value="_add!").execute()
 
-    pipe: FluentPipeProtocol = FluentPipe[FluentPipeProtocol](
+    pipe2: FluentPipeProtocol = FluentPipe[FluentPipeProtocol](
         data,
         pipe_registry.namespace,
     ).get_fluent_pipe()
 
-    res2 = pipe.sample_add_to_values(value="_Hu!").sample_filter1(mul=2).sample_filter2().execute()
+    res2 = pipe2.sample_add_to_values(value="_Hu!").sample_filter1(mul=2).sample_filter2().execute()
 
     # test update
     ic(res1)

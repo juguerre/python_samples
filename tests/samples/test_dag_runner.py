@@ -76,7 +76,7 @@ def test_create_task():
 def test_add_task_to_dag():
     """Test adding a task to the DAG."""
     dag = TaskDAG("test_dag.json")
-    task = FunctionTask(task_id="task1", _cached_func=lambda: 1)
+    task = FunctionTask[int](task_id="task1", _cached_func=lambda: 1)
     dag.add_task("task1", task)
 
     assert "task1" in dag.graph.nodes
@@ -86,8 +86,9 @@ def test_add_task_to_dag():
 def test_add_dependency():
     """Test adding a dependency between tasks."""
     dag = TaskDAG("test_dag.json")
-    task1 = FunctionTask(task_id="task1", _cached_func=lambda: 1)
-    task2 = FunctionTask(task_id="task2", _cached_func=lambda: 2)
+    task1 = FunctionTask[int](task_id="task1", _cached_func=lambda: 1)
+    task2 = FunctionTask[int](task_id="task2", _cached_func=lambda: 2)
+    task1.execute({})
 
     dag.add_task("task1", task1)
     dag.add_task("task2", task2)

@@ -24,11 +24,11 @@ from threading import Event
 from typing import (
     Any,
     ClassVar,
-    Generic,
     Literal,
     Protocol,
-    Self,
+    TypedDict,
     TypeVar,
+    cast,
     runtime_checkable,
 )
 
@@ -43,6 +43,11 @@ from toolz import curry
 from samples.content_snapshot import ContentSnapshotStore
 
 T = TypeVar("T")
+
+
+class ExecContext(TypedDict):
+    date: str
+    callback_publisher: CallBackPublisher
 
 
 class TaskSkipped(Exception):  # noqa: N818
@@ -104,20 +109,20 @@ class Scheduling(BaseModel):
         }
         tokens = self.active_days.split("-")
         if len(tokens) == 2:
-            num_days = range(weekday_map[tokens[0]], weekday_map[tokens[1]] + 1)
+            num_days = list(range(weekday_map[tokens[0]], weekday_map[tokens[1]] + 1))
         else:
             num_days = [weekday_map[tokens[0]]]
 
         return num_days
 
 
-class BaseTaskModel(BaseModel, ABC):
+class BaseTaskModel[T](BaseModel, ABC):
     """Base model for tasks."""
 
     task_id: str
     tags: list[str] = []
     status: TaskStatus = TaskStatus.PENDING
-    scheduling: Scheduling | None = Scheduling()
+    scheduling: Scheduling = Scheduling()
 
     @abstractmethod
     def execute(self, exec_context: dict[str, Any]) -> T:
@@ -135,7 +140,7 @@ class SampleBackendCallableClient:
 
     DEFAULT_TIMEOUT: ClassVar[int] = 60
 
-    def __init__(self, exec_context: dict[str, Any]) -> None:
+    def __init__(self, exec_context: ExecContext) -> None:
         self._exec_context = exec_context
         self._callback_publisher: CallBackPublisher = exec_context.get("callback_publisher")
         if not self._callback_publisher:
@@ -161,7 +166,7 @@ class SampleBackendCallableClient:
         self._callback_publisher.publish(callback_id, {"result": "success"})
 
 
-class FunctionTask(BaseTaskModel, Generic[T]):
+class FunctionTask[T](BaseTaskModel):
     """A task that wraps a callable function."""
 
     retries: int = Field(default=0, ge=0)
@@ -180,7 +185,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
         self._set_func_attr(cached_func)
 
     def _set_func_attr(self, cached_func: Callable[..., T]):
-        # Set private attribute after initialization
+        # Set private attribute after initializationdasdf
         if cached_func is not None and self.func_name is None:
             self._cached_func = cached_func
             if not inspect.isfunction(self._cached_func):  # callable class
@@ -198,7 +203,7 @@ class FunctionTask(BaseTaskModel, Generic[T]):
             raise ValueError("Function name or cached function must be provided")
 
     @property
-    def func(self) -> Callable[..., T]:
+    def func(self) -> Callable[..., T] | None:
         if not self._cached_func and self.func_name and ":" in self.func_name:
             module_name, func_name = self.func_name.rsplit(":", 1)
             module = importlib.import_module(module_name)
@@ -244,6 +249,8 @@ class FunctionTask(BaseTaskModel, Generic[T]):
                 f"'{self.func_name}' with args {self.args} and kwargs {self.kwargs}"
                 # f"\nExecution context: {exec_context}"
             )
+            if not self._cached_func:
+                raise ValueError("Can't execute FunctionTask without a function")
             res = self._cached_func(*self.args, **kwargs, task_id=self.task_id)
             return res
         except Exception as e:
@@ -303,7 +310,9 @@ class CallBackPublisher:
 
 
 class TaskDAG:
-    def __init__(self, store_filepath: str = None, init_graph: DiGraph = None) -> None:
+    def __init__(
+        self, store_filepath: str | None = None, init_graph: DiGraph | None = None
+    ) -> None:
         self._store_filepath = store_filepath
         self._graph = init_graph or nx.DiGraph()
         self._snapshot_store = ContentSnapshotStore(base_path=store_filepath, temporary=True)
@@ -312,7 +321,7 @@ class TaskDAG:
     def graph(self) -> DiGraph:
         return self._graph
 
-    def copy(self) -> Self:
+    def copy(self) -> TaskDAG:
         return TaskDAG(
             store_filepath=self._store_filepath,
             init_graph=self._graph.copy(as_view=False),
@@ -324,8 +333,8 @@ class TaskDAG:
         self.validate(graph)
         self._graph = graph
 
-    def get_task(self, task_id: str) -> Task:
-        return self._graph.nodes[task_id].get("task")
+    def get_task(self, task_id: str) -> Task[FunctionTask[dict[str, Any]]]:
+        return cast(Task[FunctionTask[dict[str, Any]]], self._graph.nodes[task_id].get("task"))
 
     def tasks(self) -> Iterable[tuple[str, Task]]:
         return [(task_id, node.get("task")) for task_id, node in self._graph.nodes(data=True)]
@@ -357,18 +366,20 @@ class TaskDAG:
         self._snapshot_store.store_snapshot("task_dag", data_str, "json")
 
     @classmethod
-    def load_dag_from_file(cls, filepath: str) -> Self:
+    def load_dag_from_file(cls, filepath: str) -> TaskDAG:
         with open(filepath) as f:
             data = json.load(f)
         return cls._get_dag_from_json(data)
 
-    def load_dag(self) -> Self:
+    def load_dag(self) -> TaskDAG:
         data_str = self._snapshot_store.load_snapshot("task_dag")
+        if data_str is None:
+            raise ValueError("No DAG with id 'task_dag' found in store")
         data = json.loads(data_str)
         return self._get_dag_from_json(data, self._store_filepath)
 
     @classmethod
-    def _get_dag_from_json(cls, data: dict[str, Any], store_filepath: str = None) -> TaskDAG:
+    def _get_dag_from_json(cls, data: dict[str, Any], store_filepath: str | None = None) -> TaskDAG:
         # Reconstruct the graph
         graph = json_graph.node_link_graph(data, edges="edges")
 
@@ -379,8 +390,10 @@ class TaskDAG:
         for node_id, node_data in graph.nodes(data=True):
             # WARNING: This is a simplified example
             # In a real implementation, you'd need proper task reconstruction logic
-            task_cls = globals().get(node_data.get("task_type"))
-            task_d = node_data.get("task")
+            task_cls: type | None = globals().get(node_data.get("task_type"))
+            if task_cls is None:
+                raise ValueError(f"Task type {node_data.get('task_type')} not found")
+            task_d: dict[str, Any] = node_data.get("task")
             task = task_cls(**task_d)
             dag.add_task(node_id, task)
 
@@ -390,7 +403,7 @@ class TaskDAG:
 
         return dag
 
-    def reset_status(self, tags: list[str] = None) -> None:
+    def reset_status(self, tags: list[str] | None = None) -> None:
         for _node_id, task in self.tasks():
             if tags and self.any_tag_in_tags(*task.tags, tags=tags):
                 task.status = TaskStatus.PENDING
@@ -403,13 +416,14 @@ class TaskDAG:
         self,
         task_id: str,
         task: Task[T] | Callable[..., T],
-        tags: list[str] = None,
+        tags: list[str] | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         # If task is a callable but not a Task, wrap it in a FunctionTask
+        f_task = None
         if callable(task) and not isinstance(task, Task):
-            task = FunctionTask(
+            f_task = FunctionTask[dict[str, Any]](
                 task_id=task_id,
                 _cached_func=task,
                 args=args,
@@ -417,7 +431,7 @@ class TaskDAG:
                 tags=tags or [],
             )
 
-        self._graph.add_node(task_id, task=task)
+        self._graph.add_node(task_id, task=f_task or task)
 
     def add_dependency(self, task_id: str, depends_on: list[str]) -> None:
         if task_id not in self.graph.nodes():
@@ -428,7 +442,7 @@ class TaskDAG:
                 raise ValueError(f"Dependency '{dep}' not found in tasks")
             self._graph.add_edge(dep, task_id)
 
-    def validate(self, working_graph: DiGraph = None) -> bool:
+    def validate(self, working_graph: DiGraph | None = None) -> bool:
         """Validate the graph for cycles.
 
         :param working_graph: The graph to validate if not set validate self graph.
@@ -466,7 +480,7 @@ class TaskDAGFilter:
         date: datetime
         tags: list[str] | None = None
 
-    def __init__(self, dag: TaskDAG, date: datetime, tags: list[str] = None) -> None:
+    def __init__(self, dag: TaskDAG, date: datetime, tags: list[str] | None = None) -> None:
         self._dag = dag
         self._filter_context = TaskDAGFilter.FilterContext(date=date, tags=tags)
 
@@ -562,7 +576,9 @@ class TaskDAGExecutor:
         self._result_event = threading.Event()
         self._lock = threading.Lock()
 
-    def wait_for_tasks_results(self, node_id: str, graph: DiGraph, timeout: float = None) -> Any:
+    def wait_for_tasks_results(
+        self, node_id: str, graph: DiGraph, timeout: float | None = None
+    ) -> Any:
         """Wait for a task to complete and return its result.
 
         :param node_id: The ID of the node that is waiting for the tasks
@@ -662,13 +678,13 @@ class TaskDAGExecutor:
                 # release semaphore to allow pool to submit more tasks
                 self._pool_workers_semaphore.release()
 
-    def execute(self, exec_context: dict[str, Any], tags: list[str] = None) -> dict[str, Any]:
+    def execute(
+        self, exec_context: dict[str, Any], tags: list[str] | None = None
+    ) -> dict[str, Any]:
         if not self._dag.validate():
             raise ValueError("The graph contains cycles and is not a valid DAG")
-
-        dag_filter = TaskDAGFilter(
-            self._dag, datetime.fromisoformat(exec_context.get("date")), tags
-        )
+        date_string: str = cast(str, exec_context.get("date"))
+        dag_filter = TaskDAGFilter(self._dag, datetime.fromisoformat(date_string), tags)
         working_dag = dag_filter.filter()
 
         logger.info(f"Final working graph node size: {working_dag.graph.number_of_nodes()}")
@@ -698,7 +714,10 @@ class TaskDAGExecutor:
                 self._pool_workers_semaphore.acquire()
                 task.status = TaskStatus.SUBMITTED
                 executor.submit(task.execute, exec_context=exec_context).add_done_callback(
-                    self.done_callback(task_id=task.task_id, exec_context=exec_context)
+                    cast(
+                        Callable,
+                        self.done_callback(task_id=task.task_id, exec_context=exec_context),
+                    )
                 )
                 # log current number of active workers
                 logger.debug(

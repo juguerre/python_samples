@@ -8,6 +8,15 @@ repos:
         files: ^src/samples/fluent_pipeline\.py$
         pass_filenames: false
 
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ⚡ ty check (instant typing)
+        entry: ./scripts/run-hook.sh uv run ty check
+        language: system
+        pass_filenames: false # Always run on the whole project for safety
+        always_run: true
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:

@@ -17,7 +17,7 @@ class ContentSnapshotStore:
 
     def __init__(
         self,
-        base_path: str = None,
+        base_path: str | None = None,
         content_snapshots_num: int = DEFAULT_SNAPSHOTS_NUM,
         temporary: bool = True,
     ) -> None:
@@ -97,5 +97,5 @@ class ContentSnapshotStore:
             content_path.write_bytes(content)
 
     def _generate_content_path(self, content_id: str, file_ext: str, timestamp: str | None) -> Path:
-        content_path = self._base_path / content_id / f"{content_id}-{timestamp}.{file_ext}"
+        content_path = self._base_path / content_id / f"{content_id}-{str(timestamp)}.{file_ext}"
         return content_path

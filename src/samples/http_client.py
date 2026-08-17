@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import os
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
 from io import StringIO
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, TypedDict, TypeVar, Unpack, cast
 
 import httpx
 import loguru
@@ -32,27 +34,27 @@ def model_as_str(
     :param style: The style to use for the string representation. simple, yaml
     :return: A pretty string representation of the model class.
     """
+    s_io: StringIO = StringIO()
     if model is None:
         return "None"
     if isinstance(model, list) and model:
         return f"List[{model[0].__class__.__name__}]"
     if isinstance(model, dict):
-        s_io: StringIO = StringIO()
         s_io.write("\nDict(\n")
         for key, value in model.items():
             s_io.write(f"  {key}: {value}\n")
         s_io.write(")")
         return s_io.getvalue()
     # for simple instance models get the class name and pydantic field values
-    if style == "simple":
-        s_io: StringIO = StringIO()
+    elif style == "simple" and isinstance(model, BaseModel):
         s_io.write(model.__class__.__name__ + "(")
+        # noinspection PyTypeChecker
         for field in model.__class__.model_fields:
             # field name and value
             s_io.write(f"{field}: {model.model_dump().get(field)}, ")
         s_io.write(")")
         return s_io.getvalue()
-    elif style == "yaml":
+    elif style == "yaml" and isinstance(model, BaseModel):
         s: str = model.model_dump_json(indent=2)
         # remove quotes and commas from json
         s = s.replace('"', "").replace(",", "").replace("{", "").replace("}", "")
@@ -63,18 +65,32 @@ def model_as_str(
         raise ValueError(f"Unknown style: {style}")
 
 
+class RequestsKwargs(TypedDict):
+    url: str
+    params: dict[str, str]
+    data: dict[str, str]
+    model_class: type[BaseModel]
+
+
 def log_request(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator to log httpclient requests"""
 
     @wraps(func)
-    def request_wrapper(*args, **kwargs) -> Callable[..., Any]:
-        method = func.__name__.replace("_", " ").upper()
+    def request_wrapper(*args, **kwargs: Unpack[RequestsKwargs]) -> Callable[..., Any]:
+        method = getattr(func, "__name__", "UNKNOWN").replace("_", " ").upper()
         params = kwargs.get("params")
         data = kwargs.get("data")
         url = kwargs.get("url")
-        model_class = kwargs.get("model_class").__name__
+        model_class: type = cast(type, kwargs.get("model_class"))
+        model_class_name: str = (
+            model_class.__name__
+            if "model_class" in kwargs
+            and kwargs.get("model_class")
+            and hasattr(kwargs.get("model_class"), "__name__")
+            else "UNKNOWN"
+        )
         logger.debug(
-            f"Request: method={method} | url={url} | model_class={model_class} "
+            f"Request: method={method} | url={url} | model_class={model_class_name} "
             f"| params={params} | data={data}"
         )
         return func(*args, **kwargs)
@@ -121,10 +137,10 @@ class HttpRateLimitError(HttpApiError):
         self.retry_after = retry_after
 
 
-class wait_for_rate_limit(wait_base):
+class wait_for_rate_limit(wait_base):  # noqa: N801
     """Custom tenacity wait strategy that honors Retry-After headers"""
 
-    def __init__(self, fallback: wait_base):
+    def __init__(self, fallback: wait_base) -> None:
         self.fallback = fallback
 
     def __call__(self, retry_state: Any) -> float:
@@ -195,7 +211,10 @@ class GitHubRepo(BaseModel):
     language: str | None = None
 
 
-class BaseHttpClient:
+G = TypeVar("G")
+
+
+class BaseHttpClient[G]:
     """A base HTTP client with retry logic and Pydantic validation."""
 
     @staticmethod
@@ -211,9 +230,7 @@ class BaseHttpClient:
 
     RETRY_CONFIG: ClassVar[dict[str, Any]] = {
         "stop": stop_after_attempt(5),
-        "wait": wait_for_rate_limit(
-            fallback=wait_exponential(multiplier=1, min=2, max=10)
-        ),
+        "wait": wait_for_rate_limit(fallback=wait_exponential(multiplier=1, min=2, max=10)),
         "retry": retry_if_exception(_is_transient_error),
         "reraise": True,
     }
@@ -473,24 +490,24 @@ class BaseHttpClient:
         if self._client_async:
             await self._client_async.aclose()
 
-    def __enter__(self) -> "BaseHttpClient":
+    def __enter__(self) -> G:
         """Enter the synchronous context manager."""
-        return self
+        return cast(G, self)
 
     def __exit__(self, *args: Any) -> None:
         """Exit the synchronous context manager and close the client."""
         self.close()
 
-    async def __aenter__(self) -> "BaseHttpClient":
+    async def __aenter__(self) -> G:
         """Enter the asynchronous context manager."""
-        return self
+        return cast(G, self)
 
     async def __aexit__(self, *args: Any) -> None:
         """Exit the asynchronous context manager and close the client."""
         await self.aclose()
 
 
-class GitHubClient(BaseHttpClient):
+class GitHubClient[G](BaseHttpClient):
     BASE_URL: ClassVar[str] = "https://api.github.com"
     BASE_HEADERS: ClassVar[dict] = {
         "Accept": "application/vnd.github.v3+json",
@@ -557,7 +574,7 @@ class GitHubClient(BaseHttpClient):
 if __name__ == "__main__":
     # Example usage
     async def main() -> None:
-        async with GitHubClient() as my_client:
+        async with GitHubClient[GitHubClient]() as my_client:
             try:
                 # Sync call
                 user = await asyncio.to_thread(my_client.get_user, "juguerre")

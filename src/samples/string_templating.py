@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -59,8 +58,14 @@ def date_delta(s: str, element: Literal["years", "months", "weeks", "days"], rel
     :return: new string datetime
     """
     d = parse(s)
-    param = {element: rel}
-    d = d + relativedelta(**param)
+    if element == "years":
+        d = d + relativedelta(years=rel)
+    elif element == "months":
+        d = d + relativedelta(months=rel)
+    elif element == "weeks":
+        d = d + relativedelta(weeks=rel)
+    elif element == "days":
+        d = d + relativedelta(days=rel)
     return d.isoformat()
 
 
@@ -101,7 +106,9 @@ def month_first_day(s: str) -> str:
 
 
 # Define safe string operations
-SAFE_OPERATIONS: dict[str, Callable] = {
+
+# noinspection PyArgumentList
+SAFE_OPERATIONS = {
     "datap": datap,
     "date_delta": date_delta,
     "date_format": date_format,
@@ -130,7 +137,7 @@ SAFE_OPERATIONS: dict[str, Callable] = {
     "day_after": date_delta(element="days", rel=1),
     "month_last_day": month_last_day,
     "month_first_day": month_first_day,
-    # Simple formats for date parts
+    # Simple formats for s
     "syear": date_format(frmt="%y"),
     "smonth": date_format(frmt="%b"),
     # Add more safe operations as needed

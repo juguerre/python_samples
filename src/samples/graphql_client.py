@@ -70,7 +70,7 @@ class MyGraphQLError(Exception):
             for e in self.errors:
                 summary = f"'{e.message}'"
                 if hasattr(e, "path") and e.path:
-                    summary += f" at {'.'.join(map(str, e.path))}"
+                    summary += f" at {'.'.join(map(str, str(e.path)))}"
                 error_summaries.append(summary)
             parts.append(f"GraphQL Errors: [{', '.join(error_summaries)}]")
 

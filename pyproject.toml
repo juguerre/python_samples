@@ -5,26 +5,35 @@ description = "A sample project demonstrating DAG execution with NetworkX"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "basedpyright>=1.38.0",
+    "gql>=4.0.0",
     "httpx>=0.28.1",
     "icecream>=2.1.10",
     "jinja2>=3.1.6",
     "loguru>=0.7.3",
     "networkx>=3.0",
+    "pandas>=3.0.5",
+    "pandas-stubs>=3.0.5.260730",
     "pydantic>=2.12.3",
+    "pyrefly>=0.52.0",
+    "pyright>=1.1.408",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.1",
+    "ruff>=0.15.1",
+    "tabulate>=0.10.0",
     "tenacity>=9.1.2",
     "toolz>=1.1.0",
+    "ty>=0.0.17",
     "typing-extensions>=4.15.0",
 ]
 
 [build-system]
 requires = ["uv_build>=0.9.3,<0.10.0"]
 build-backend = "uv_build"
-module-root = ""
+#module-root = "src"
 
 [dependency-groups]
-dev = ["prek>=0.3.2", "pytest>=8.4.2", "pytest-cov>=7.0.0"]
+dev = ["prek>=0.3.2", "pytest>=8.4.2", "pytest-cov>=7.0.0", "sqlfluff>=0.19.0"]
 
 [tool.ruff]
 line-length = 100
@@ -97,4 +106,40 @@ aliasing = "explicit"
 
 [tool.sqlfluff.rules.convention.not_equal]
 preferred_not_equal_style = "c_style"
+
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/__pycache__", "**/.pytest_cache"]
+defineConstant = { DEBUG = true }
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+typeCheckingMode = "standard"
+reportMissingImports = "error"
+reportMissingTypeStubs = "warning"
+reportMissingTypeArgument = "warning"
+reportGeneralTypeIssues = "error"
+reportOptionalMemberAccess = "warning"
+reportOptionalSubscript = "warning"
+reportPrivateImportUsage = "warning"
+
+[tool.pyrefly]
+paths = ["src", "scripts"]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_unreachable = true
+
+[tool.ty.rules]
+# In 2026, ty allows granular rule control
+all = "error"
+unresolved-import = "error"
+# possibly-unbound-attribute = "warn"
+
+[tool.ty.src]
+# Ty type checker configuration from Astral
+include = ["src"]
+exclude = ["**/__pycache__", "**/.pytest_cache", "tests"]
 

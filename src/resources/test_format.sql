@@ -97,7 +97,10 @@ channel_attribution AS (
     COUNT(DISTINCT channel) OVER (PARTITION BY session_id) AS channel_count
   FROM
     `project.dataset.attribution_events`
-  WHERE timestamp >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH)
+  WHERE timestamp >= DATE_SUB(
+    CURRENT_DATE(
+    ), INTERVAL 3 MONTH
+  )
 ),
 
 

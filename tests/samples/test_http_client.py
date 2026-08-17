@@ -137,6 +137,7 @@ class TestBaseHttpClient:
         # Assertions
         assert isinstance(result, GitHubUser)
         assert result.login == "testuser"
+        # pyrefly: ignore missing-attribute
         base_client.client.get.assert_called_once()
         mock_response.raise_for_status.assert_called_once()
 
@@ -198,6 +199,7 @@ class TestBaseHttpClient:
             base_client._get(url="/rate-limit", model_class=GitHubUser)
 
         assert excinfo.value.status_code == 429
+        assert excinfo.value.retry_after is not None
         # Should be roughly 1 second
         assert 0 <= excinfo.value.retry_after <= 1.1
 
@@ -245,6 +247,7 @@ class TestGitHubClient:
         """Test GitHubClient initialization without a token."""
         client = GitHubClient(token="")
         env_token = os.getenv("GITHUB_TOKEN")
+        assert env_token is not None
         assert (
             "Authorization" not in client.client.headers
             or client.client.headers["Authorization"] == "token " + env_token
@@ -267,6 +270,7 @@ class TestGitHubClient:
         # Assertions
         assert isinstance(user, GitHubUser)
         assert user.login == "testuser"
+        # pyrefly-ignore missing-attribute
         mock_github_client.client.get.assert_called_once()
 
     def test_get_repos_success(
