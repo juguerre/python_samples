@@ -1,9 +1,45 @@
 # merge_snapshot_in_history.py
-# Script to merge content snapshot in history using SCD type 2 pattern
+# Script to merge content snapshot in history using SCD type 2 pattern with in-place updates
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Sequence
 from datetime import datetime, timedelta
+from typing import Any, cast
 
 import pandas as pd
-from pandas import DataFrame, isna
+from pandas import DataFrame, Series, isna
+
+
+def _compute_hash_diff(values: Sequence[Any]) -> str:
+    """Return a SHA-256 hex-digest for a list of values, normalizing nulls to empty string."""
+    normalized = ",".join(str(v) if not isna(v) else "" for v in values)
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _compute_vectorized_hash_diff(df: DataFrame, columns: Sequence[str]) -> list[str]:
+    """Return SHA-256 hex-digests for specified columns in a fast vectorized manner."""
+    if not columns or df.empty:
+        return [""] * len(df)
+    series_list: Series[str] = cast(Series, [df[col].fillna("").astype(str) for col in columns])
+    joined_series = series_list[0]
+    for s in series_list[1:]:
+        joined_series = joined_series + "," + s
+    return [hashlib.sha256(val.encode("utf-8")).hexdigest() for val in joined_series]
+
+
+def _generate_vectorized_sk_id(df: DataFrame, sk_columns: Sequence[str]) -> pd.Series:
+    """Generate surrogate key IDs by vectorially concatenating non-null sk_columns."""
+    if df.empty or not sk_columns:
+        return pd.Series([], dtype=str, index=df.index)
+    result: Series[str] = df[sk_columns[0]].astype(str)
+    for col in sk_columns[1:]:
+        if col in df.columns:
+            has_val = ~df[col].isna()
+            col_str = df[col].astype(str)
+            result: Series[str] = result.where(~has_val, result + "," + col_str)  # ty:ignore[unsupported-operator]
+    return result
+
 
 SAMPLE_SNAPSHOT_DF = DataFrame(
     {
@@ -25,9 +61,9 @@ SAMPLE_HISTORY_DF = DataFrame(
         "valid_to": [pd.NA, pd.NA, "2026-01-02"],
         "updated_at": ["2026-01-02", "2026-01-01", "2026-01-01"],
         "hash_diff": [
-            "username1,company1,email1",
-            "username4,company4,email4",
-            "username3,company3,email3",
+            _compute_hash_diff(["username1", "company1", "email1"]),
+            _compute_hash_diff(["username4", "company4", "email4"]),
+            _compute_hash_diff(["username3", "company3", "email3"]),
         ],
         "id": ["username1", "username4", "username3"],
         "company": ["company1", "company4", "company3"],
@@ -44,169 +80,128 @@ def merge_snapshot_in_history(
     descriptive_columns: list[str],
     bussines_date_str: str,
 ) -> DataFrame:
-    """Merge a generic content snapshot into a generic history using SCD type 2 pattern.
+    """Merge a generic content snapshot into history using SCD type 2 pattern.
 
-    Key columns are the columns that identify the unique row in the snapshot and will be used to
-    generate hash_diff column.
-    Surrogate key is the column that identify the unique row in the history has the key columns plus
-    the timestamp columns: valid_from, valid_to and updated_at.
+    - New rows: Inserted with valid_from = bussines_date_str, valid_to = pd.NA.
+    - Updated rows: Updated in-place with new attributes and updated_at = bussines_date_str.
+    - Deleted rows: Closed with valid_to = bussines_date_str - 1 day and updated sk_id.
+    - Historical / Closed rows: Retained unchanged.
 
-    :param snapshot: The snapshot to merge into the history.
-    :param history: The history to merge the snapshot into.
-    :param key_columns: The columns that identify the unique row in the snapshot.
-    :param descriptive_columns: The columns that describe the row in the snapshot.
-    :param bussines_date_str: The business date to use for the valid_from and valid_to columns.
-    :return: The merged history.
+    :param snapshot: The snapshot DataFrame to merge.
+    :param history: The existing history DataFrame.
+    :param key_columns: The columns that uniquely identify a row.
+    :param descriptive_columns: The tracked descriptive columns.
+    :param bussines_date_str: The business date (YYYY-MM-DD).
+    :return: The merged history DataFrame.
     """
-    # 1. check history dataframe for required columns: valid_from, valid_to, updated_at and sk_id
-    required_scd2_columns = ["valid_from", "valid_to", "updated_at", "sk_id", "hash_diff"]
-    if not all(col in history.columns for col in required_scd2_columns):
-        raise ValueError(
-            f"History dataframe must contain all required columns: {required_scd2_columns}"
-        )
-    # 2. check history and snapshot for key and descriptive columns
-    columns_to_check = key_columns + descriptive_columns
-    if not all(col in snapshot.columns for col in columns_to_check):
-        raise ValueError(
-            f"Snapshot dataframe must contain all key and descriptive columns: {key_columns}"
-        )
-    if not all(col in history.columns for col in columns_to_check):
-        raise ValueError(
-            f"History dataframe must contain all key and descriptive columns: {key_columns}"
-        )
-    current_history = history[history["valid_to"].isnull()]
-    sk_columns = key_columns + ["valid_from", "valid_to"]
+    # 1. Validate required columns
+    _validate_required_columns(descriptive_columns, history, key_columns, snapshot)
 
-    # 3. generate hash_diff column
-    snapshot["hash_diff"] = snapshot[key_columns + descriptive_columns].apply(
-        lambda row: ",".join(row.values), axis=1
-    )
+    # 2. Defensive copy and fast vectorized hash computation
+    snapshot = snapshot.copy()
+    hash_cols = key_columns + descriptive_columns
+    snapshot["hash_diff"] = _compute_vectorized_hash_diff(snapshot, hash_cols)
 
-    # 4. Find snapshot rows with key_columns not present in current history (valid_to == null)
-    new_rows = _get_new_rows(
-        current_history=current_history,
-        snapshot=snapshot,
-        bussines_date_str=bussines_date_str,
-        key_columns=key_columns,
-        sk_columns=sk_columns,
-    )
+    # 3. Partition history into closed historical records and current active records
+    is_active = history["valid_to"].isna()
+    closed_history = history[~is_active].copy()
+    current_history = history[is_active].copy()
 
-    # 5. Find updated rows in snapshot (rows present in both current history and snapshot but with
-    # different hash_diff for the same key_columns)
-    # join snapshot with current history on key_columns
-    updated_rows = _get_updated_rows(
-        current_history=current_history,
-        snapshot=snapshot,
-        bussines_date_str=bussines_date_str,
-        key_columns=key_columns,
-    )
-
-    # 6. Find deleted rows in snapshot (rows present in current history but not in snapshot)
-    deleted_rows = _get_deleted_rows(
-        current_history=current_history,
-        snapshot=snapshot,
-        bussines_date_str=bussines_date_str,
-        key_columns=key_columns,
-    )
-
-    # 7. Merge history with new, updated and deleted rows
-    history = _get_merged_history(
-        history=history,
-        new_rows=new_rows,
-        updated_rows=updated_rows,
-        deleted_rows=deleted_rows,
-        sk_columns=sk_columns,
-    )
-
-    return history
-
-
-def _get_merged_history(
-    history: DataFrame,
-    new_rows: DataFrame,
-    updated_rows: DataFrame,
-    deleted_rows: DataFrame,
-    sk_columns: list[str],
-) -> DataFrame:
-    history = pd.concat([history, new_rows], ignore_index=True)
-
-    # 8. Merge updated (update with updated_at)
-    # replace rows in history with updated rows
-    history = history[~history[["sk_id"]].isin(updated_rows[["sk_id"]]).all(axis=1)]
-    history = pd.concat([history, updated_rows], ignore_index=True)
-
-    # 9. Merge deleted (update with valid_to)
-    history = history[~history[["sk_id"]].isin(deleted_rows[["sk_id"]]).all(axis=1)]
-    deleted_rows["sk_id"] = deleted_rows[sk_columns].apply(
-        _generate_sk_id, args=(sk_columns,), axis=1
-    )
-    history = pd.concat([history, deleted_rows], ignore_index=True)
-    return history
-
-
-def _get_deleted_rows(
-    current_history: DataFrame,
-    snapshot: DataFrame,
-    bussines_date_str: str,
-    key_columns: list[str],
-) -> DataFrame:
-    deleted_rows = current_history[
-        ~current_history[key_columns].isin(snapshot[key_columns]).all(axis=1)
-    ]
-    deleted_rows = deleted_rows.reset_index(drop=True)
-    valid_to = (
+    valid_to_deleted = (
         datetime.strptime(bussines_date_str, "%Y-%m-%d").date() - timedelta(days=1)
     ).isoformat()
-    deleted_rows["valid_to"] = valid_to
-    return deleted_rows
 
+    # 4. Single-pass full outer join between current active history and snapshot
+    snap_non_key = [c for c in snapshot.columns if c not in key_columns]
+    snap_prep = snapshot.rename(columns={c: f"{c}__snap" for c in snap_non_key})
 
-def _get_updated_rows(
-    current_history: DataFrame,
-    snapshot: DataFrame,
-    bussines_date_str: str,
-    key_columns: list[str],
-) -> DataFrame:
-    merged_snapshot = snapshot.merge(
-        current_history, on=key_columns, suffixes=("_x", "_y"), how="inner"
+    merged = current_history.merge(
+        snap_prep,
+        on=key_columns,
+        how="outer",
+        indicator="_merge_indicator",
     )
-    updated_rows = merged_snapshot[merged_snapshot["hash_diff_x"] != merged_snapshot["hash_diff_y"]]
-    updated_rows = updated_rows.reset_index(drop=True)
-    # drop columns with suffix _y and rename columns with suffix _x
-    scd2_cols = ["valid_from", "valid_to", "updated_at"]
-    history_cols_to_drop = [
-        col for col in updated_rows.columns if col.endswith("_y") and col not in scd2_cols
-    ]
-    updated_rows = updated_rows.drop(columns=history_cols_to_drop)
-    updated_rows = updated_rows.rename(
-        columns={
-            f"{col}": col.rsplit("_", 1)[-2] for col in updated_rows.columns if col.endswith("_x")
-        }
+
+    is_deleted = merged["_merge_indicator"] == "left_only"
+    is_new = merged["_merge_indicator"] == "right_only"
+    is_both = merged["_merge_indicator"] == "both"
+
+    is_updated = is_both & (merged["hash_diff"] != merged["hash_diff__snap"])
+    is_unchanged = is_both & (merged["hash_diff"] == merged["hash_diff__snap"])
+
+    # Part A: Unchanged active records
+    unchanged_df = merged.loc[is_unchanged, history.columns].copy()
+
+    # Part B: Updated active records (in-place update)
+    if is_updated.any():
+        updated_df = merged.loc[is_updated].copy()
+        for c in snap_non_key:
+            updated_df[c] = updated_df[f"{c}__snap"]
+        updated_df["updated_at"] = bussines_date_str
+        updated_df["valid_to"] = pd.NA
+        updated_df = updated_df[history.columns]
+    else:
+        updated_df = DataFrame(columns=history.columns)
+
+    # Part C: Deleted records (close valid_to and recompute sk_id)
+    if is_deleted.any():
+        deleted_df = merged.loc[is_deleted, history.columns].copy()
+        deleted_df["valid_to"] = valid_to_deleted
+        sk_columns = key_columns + ["valid_from", "valid_to"]
+        deleted_df["sk_id"] = _generate_vectorized_sk_id(deleted_df, sk_columns)
+    else:
+        deleted_df = DataFrame(columns=history.columns)
+
+    # Part D: New records (insert active row with valid_from = bussines_date_str)
+    if is_new.any():
+        snap_cols_in_merged = key_columns + [f"{c}__snap" for c in snap_non_key]
+        new_df: DataFrame = merged.loc[is_new, snap_cols_in_merged].copy()  # ty:ignore[invalid-assignment]
+        snap_rename_back = {f"{c}__snap": c for c in snap_non_key}
+        new_df = new_df.rename(columns=snap_rename_back)
+        new_df["valid_from"] = bussines_date_str
+        new_df["valid_to"] = pd.NA
+        new_df["updated_at"] = bussines_date_str
+        sk_columns = key_columns + ["valid_from"]
+        new_df["sk_id"] = _generate_vectorized_sk_id(new_df, sk_columns)
+
+        # Align with history schema
+        for c in history.columns:
+            if c not in new_df.columns:
+                new_df[c] = pd.NA
+        new_df = new_df[history.columns]
+    else:
+        new_df = DataFrame(columns=history.columns)
+
+    # 5. Single concatenation preserving original history column ordering
+    result = pd.concat(
+        [closed_history, unchanged_df, updated_df, deleted_df, new_df],
+        ignore_index=True,
     )
-    updated_rows["updated_at"] = bussines_date_str
-    updated_rows["valid_to"] = pd.NA
-    return updated_rows
+    return result[history.columns]
 
 
-def _get_new_rows(
-    current_history: DataFrame,
-    snapshot: DataFrame,
-    key_columns: list[str],
-    bussines_date_str: str,
-    sk_columns: list[str],
-) -> DataFrame:
-    new_rows = snapshot[~snapshot[key_columns].isin(current_history[key_columns]).all(axis=1)]
-    new_rows = new_rows.reset_index(drop=True)
-    new_rows["valid_from"] = bussines_date_str
-    new_rows["valid_to"] = pd.NA
-    new_rows["updated_at"] = bussines_date_str
-    new_rows["sk_id"] = new_rows[sk_columns].apply(_generate_sk_id, args=(sk_columns,), axis=1)
-    return new_rows
+def _validate_required_columns(
+    descriptive_columns: list[str], history: DataFrame, key_columns: list[str], snapshot: DataFrame
+):
+    required_scd2_columns = ["valid_from", "valid_to", "updated_at", "sk_id", "hash_diff"]
+    missing_history_scd = [col for col in required_scd2_columns if col not in history.columns]
+    if missing_history_scd:
+        raise ValueError(
+            f"History dataframe must contain all required columns: {missing_history_scd}"
+        )
 
+    columns_to_check = key_columns + descriptive_columns
+    missing_snap = [col for col in columns_to_check if col not in snapshot.columns]
+    if missing_snap:
+        raise ValueError(
+            f"Snapshot dataframe must contain all key and descriptive columns: {missing_snap}"
+        )
 
-def _generate_sk_id(row: pd.Series, sk_columns: list[str]) -> str:
-    non_null_values = [row[c] for c in sk_columns if not isna(row[c])]
-    return ",".join(non_null_values)
+    missing_hist = [col for col in columns_to_check if col not in history.columns]
+    if missing_hist:
+        raise ValueError(
+            f"History dataframe must contain all key and descriptive columns: {missing_hist}"
+        )
 
 
 if __name__ == "__main__":
@@ -217,5 +212,4 @@ if __name__ == "__main__":
         ["company", "email"],
         "2026-01-03",
     )
-    # TODO print sample of histo df without using print func
     # print(histo.to_string())
